@@ -1,0 +1,46 @@
+git status #gives status
+git log #shows history of commits
+
+Add/Commit/Push
+git add <file name> #adds a file to the staging area
+git add . (adds all changes)
+git commit -m "description of upload" #commits to the local repository with a message
+git push origin "name of branch"
+git push --all origin (push all branches to origin)
+
+Branching
+git checkout <name> #moves to the branch <name>
+git checkout <commit hash> #moves to a certain commit in the past (past hash found with git log)
+git branch #lists branches in repository
+git branch <name> #creates new branch
+git checkout -b <name of branch> #creates a branch with a new name and moves to that branch (short for git branch <name>; git checkout <name>)
+git branch -d <name of branch> #deletes branch locally
+git push --delete origin <brach name> #deletes branch remotely
+git push origin :<branch name> #another way of deleting it remotely
+git stash #stash your changes on a feature branch without commiting -> move branch to do some other stuff (only stashes added files)
+git stash pop #moved back to feature branch and this restores the stashed changes
+
+Merging
+git checkout main # switch to main branch 1st
+git merge <name of branch  -to be merged>
+git merge --squash <name of branch> # merges the branch into main without creating a merge commit 
+#thus creates a single commit on main branch containing all changes from source branch
+#but doesn't preserve history of source branch
+git --rebase #adds all changes on branch linearly to the master branch #don't use if multiple people working
+
+Retrieving data
+git fetch --all (fetch to check first copies into repository but not workflosw)
+git pull --all 
+git pull origin "name" 
+git remote prune origin %update branches etc from online repository
+
+
+Clone directory
+Change the current working directory to the location where you want the cloned directory.
+Type git clone, and then paste the URL you copied earlier.
+
+
+Virtual environment
+#source EPOTFenv/bin/activate (launching and exiting the virtual environment containing the required modules, stored in the working directory for VNA_Analysis)
+#EPOTFenv/bin/python your_script.py - for running a script in the virtual environment
+#source deactivate
