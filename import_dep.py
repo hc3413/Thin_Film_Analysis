@@ -17,7 +17,6 @@ from pptx.oxml import parse_xml
 import math
 
 
-
 import scipy
 from scipy.optimize import fsolve
 from scipy.stats import linregress
