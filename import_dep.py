@@ -5,16 +5,23 @@ import os
 import datetime
 import pathlib
 from pathlib import Path
-import math
-import scipy
-from scipy.optimize import fsolve
-from scipy.stats import linregress
+import scienceplots
+import matplotlib.colors as colors
+from matplotlib import ticker
 from pptx import Presentation
 from pptx.util import Inches, Pt, Cm
 from pptx.dml.color import RGBColor
 from pptx.enum.text import PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.oxml import parse_xml
+import math
+
+
+
+import scipy
+from scipy.optimize import fsolve
+from scipy.stats import linregress
+
 
 
 
