@@ -15,7 +15,8 @@ from pptx.enum.text import PP_ALIGN
 from pptx.oxml.ns import qn
 from pptx.oxml import parse_xml
 import math
-
+from scipy.interpolate import griddata
+from matplotlib import cm
 
 import scipy
 from scipy.optimize import fsolve
