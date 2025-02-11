@@ -17,10 +17,17 @@ from pptx.oxml import parse_xml
 import math
 from scipy.interpolate import griddata
 from matplotlib import cm
+import matplotlib.colors as mcolors
+from matplotlib.figure import Figure
+from scipy.ndimage import gaussian_filter
+from matplotlib.colors import LogNorm, ListedColormap
+from matplotlib.ticker import LogFormatter
+from matplotlib.ticker import LogFormatterSciNotation
 
 import scipy
 from scipy.optimize import fsolve
 from scipy.stats import linregress
+import matplotlib.patches as mpatches
 
 
 
