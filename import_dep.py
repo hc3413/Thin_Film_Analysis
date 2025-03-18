@@ -23,6 +23,7 @@ from scipy.ndimage import gaussian_filter
 from matplotlib.colors import LogNorm, ListedColormap
 from matplotlib.ticker import LogFormatter
 from matplotlib.ticker import LogFormatterSciNotation
+from typing import Optional, Tuple, Any, Dict
 
 import scipy
 from scipy.optimize import fsolve

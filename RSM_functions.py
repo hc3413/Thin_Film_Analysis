@@ -1,10 +1,5 @@
 #import all the libraries needed
 from import_dep import *
-from typing import Optional, Tuple, Any, Dict
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib import ticker
-from scipy.interpolate import griddata
 
 def _plot_on_ax(
     ax: plt.Axes,
@@ -12,6 +7,7 @@ def _plot_on_ax(
     class_obj: Any,
     count_d: int,
     threshold_filt: float = 0,
+    grid_filt: float = 100,
     plot_type: str = 'scatter',
     ax_unit: str = 'reciprocal',
     colormap: str = 'plasma',
@@ -20,6 +16,8 @@ def _plot_on_ax(
     y_lim: Optional[Tuple[float, float]] = None,
     contour_color: bool = False,
     show_colorbar: bool = True,
+    first_index: bool = False,  # New parameter to prevent double plotting of labels
+    resolution_scaling: Optional[float] = None, # New parameter to scale the resolution of the meshgrid
 ) -> None:
     """
     A helper function to plot a single dataset on the provided axis.
@@ -30,6 +28,7 @@ def _plot_on_ax(
         class_obj    : An object that may hold additional data (like lattice parameters).
         count_d      : Index to reference specific dataset properties from class_obj.
         threshold_filt: Intensity threshold for filtering data.
+        grid_filt:    Filter the grid data based on threshold.
         plot_type    : Type of plot to generate: 'scatter', 'contour', or 'mesh'.
         ax_unit      : Type of axis unit to use, e.g., 'reciprocal' or 'lattice'.
         colormap     : The colormap to use for plotting.
@@ -66,6 +65,25 @@ def _plot_on_ax(
         ax.set_title(r"Lattice Parameters ($a$ vs $c$)", fontsize=14)
     else:
         raise ValueError("Unknown ax_unit: choose 'reciprocal' or 'lattice'")
+    
+    
+     # Interpolate data if resolution_scaling is specified
+    if resolution_scaling is not None:
+        # Scale and interpolate the meshgrid data
+        nx = int(grid_x.shape[1] * resolution_scaling)
+        ny = int(grid_y.shape[0] * resolution_scaling)
+        xi = np.linspace(grid_x.min(), grid_x.max(), nx)
+        yi = np.linspace(grid_y.min(), grid_y.max(), ny)
+        xi, yi = np.meshgrid(xi, yi)
+        grid_intensity = griddata((grid_x.flatten(), grid_y.flatten()), grid_intensity.flatten(), (xi, yi), method='nearest')
+        grid_x, grid_y = xi, yi
+        
+        # Scale and interpolate the scatter data
+        x = xi.flatten()
+        y = yi.flatten()
+        z = grid_intensity.flatten()
+        
+    
 
     # Filter data based on threshold
     filt_indices = z > threshold_filt
@@ -83,7 +101,7 @@ def _plot_on_ax(
         c_color = 'black'
 
     # Filtering for the contours only
-    grid_intensity[grid_intensity < 100] = 0
+    grid_intensity[grid_intensity < grid_filt] = 0
     
     # Apply logarithmic scaling to plot_intensity for alpha mapping
     log_plot_intensity = np.log10(plot_intensity + 1e-99)
@@ -104,12 +122,14 @@ def _plot_on_ax(
     
     elif plot_type == 'contour':
         
-        p_out = ax.scatter(x_filt, y_filt, c=plot_intensity, cmap=colormap, s=2.5, edgecolors='none', label=label_str, norm=LogNorm(),alpha=alpha_values)
+        p_out = ax.scatter(x_filt, y_filt, c=plot_intensity, cmap=colormap, s=2.5, edgecolors='none',  norm=LogNorm(),alpha=alpha_values)
         
         contour_levels = np.logspace(np.log10(1 + 1e-99), np.log10(plot_intensity.max()), 10)
         
         # generate contours from the meshgrid data to prevent errors/streaking
         ax.contour(grid_x, grid_y, grid_intensity, levels=contour_levels, colors=c_color, linewidths=0.3)
+        
+        scatter_for_legend = ax.scatter([], [], c=c_color, label=label_str)
         
     elif plot_type == 'mesh':
 
@@ -146,11 +166,18 @@ def _plot_on_ax(
             cbar.ax.tick_params(labelsize=10)
             
     # Add guidelines for lattice plots
-    if ax_unit == 'lattice':
+    if ax_unit == 'lattice' and first_index == True:
         ax.scatter(4.14, 4.14, color='red', marker='+', s=100, label='BaSnO3 bulk')
         ax.scatter(4.035, 4.033, color='blue', marker='+', s=100, label='SrSnO3 bulk')
         ax.axvline(x=3.905, color='green', linestyle='--', linewidth=1)
         ax.axhline(y=3.905, color='green', linestyle='--', linewidth=1)
+        
+    # Add guidelines for lattice plots
+    if ax_unit == 'reciprocal' and first_index == True:
+        ax.scatter(1.526, 4.571, color='red', marker='+', s=100, label='BaSnO3 on STO')
+        ax.scatter(1.581, 4.555, color='green', marker='+', s=100, label='SrSnO3 on STO')
+        #ax.axvline(x=1.61, color='green', linestyle='--', linewidth=1)
+        #ax.axhline(y=1.61*3, color='green', linestyle='--', linewidth=1)
 
     # Set axis limits if provided
     if x_lim is not None:
@@ -192,13 +219,15 @@ def create_custom_colormap(base_cmap='jet'):
 custom_cmap = 'jet'
 
 
-def XRR_plot_sep(
+def RSM_plot_sep(
     dat: Tuple[Any],
     threshold_filt: float = 0,
+    grid_filt: float = 100,
     x_lim: Optional[Tuple[float, float]] = None,
     y_lim: Optional[Tuple[float, float]] = None,
     plot_type: str = 'scatter',
-    ax_unit: str = 'reciprocal'
+    ax_unit: str = 'reciprocal',
+    resolution_scaling: Optional[float] = None, # New parameter to scale the resolution of the meshgrid
 ) -> Figure:
     """
     Plot multiple datasets in separate subplots.
@@ -208,10 +237,12 @@ def XRR_plot_sep(
              a 'qxqz_df' attribute (a sequence of dictionaries with data) and may have
              a 'plot_string' attribute and 'lat_param_df' for lattice parameters.
         threshold_filt: Intensity threshold used to filter data.
+        grid_filt: Filter the grid data based on threshold.
         x_lim: Optional tuple specifying the x-axis limits (min, max).
         y_lim: Optional tuple specifying the y-axis limits (min, max).
         plot_type: Type of plot to generate; one of 'scatter', 'contour', or 'mesh'.
         ax_unit: Unit type for the axes; either 'reciprocal' or 'lattice'.
+        resolution_scaling: Optional parameter to scale the resolution of the meshgrid.
 
     Returns:
         The matplotlib Figure object containing the subplots.
@@ -223,29 +254,35 @@ def XRR_plot_sep(
     gs = fig.add_gridspec(n_rows, 2)
     
     subplot_counter = 0
+   
     for class_obj in dat:
+        first_index = True # New parameter to prevent double plotting of labels
         for count_d, d in enumerate(class_obj.qxqz_df):
             ax = fig.add_subplot(gs[subplot_counter // 2, subplot_counter % 2])
             label_str = (class_obj.plot_string[count_d]
                          if hasattr(class_obj, 'plot_string') else None)
-            _plot_on_ax(ax, d, class_obj, count_d, threshold_filt,
-                        plot_type, ax_unit, colormap= custom_cmap , label_str=label_str,
-                        x_lim=x_lim, y_lim=y_lim)
+            _plot_on_ax(ax, d, class_obj, count_d, threshold_filt = threshold_filt,
+                        grid_filt = grid_filt,
+                        plot_type = plot_type, ax_unit = ax_unit, colormap= custom_cmap , label_str=label_str,
+                        x_lim=x_lim, y_lim=y_lim, resolution_scaling=resolution_scaling, first_index=first_index)
             subplot_counter += 1
-
+            first_index = False
+            
     fig.tight_layout()
     fig.subplots_adjust(left=0.18, right=0.98, bottom=0.18, top=0.98)
     plt.show()
     return fig
 
 
-def XRR_plot_same(
+def RSM_plot_same(
     dat: Tuple[Any],
     threshold_filt: float = 0,
+    grid_filt: float = 100,
     x_lim: Optional[Tuple[float, float]] = None,
     y_lim: Optional[Tuple[float, float]] = None,
     plot_type: str = 'scatter',
     ax_unit: str = 'reciprocal',
+    resolution_scaling: Optional[float] = None, # New parameter to scale the resolution of the meshgrid
 ) -> Figure:
     """
     Plot multiple datasets on a single set of axes.
@@ -259,6 +296,7 @@ def XRR_plot_same(
         y_lim: Optional tuple specifying the y-axis limits (min, max).
         plot_type: Type of plot to generate; one of 'scatter', 'contour', or 'mesh'.
         ax_unit: Unit type for the axes; either 'reciprocal' or 'lattice'.
+        resolution_scaling: Optional parameter to scale the resolution of the meshgrid.
 
     Returns:
         The matplotlib Figure object containing the plot.
@@ -267,16 +305,18 @@ def XRR_plot_same(
     
     col_maps = ['Purples', 'Greens', 'Oranges', 'Blues', 'Reds', 'Greys']
     col_counter = 0
+    first_index = True # New parameter to prevent double plotting of labels
     for class_obj in dat:
         for count_d, d in enumerate(class_obj.qxqz_df):
             label_str = (class_obj.plot_string[count_d]
                          if hasattr(class_obj, 'plot_string') else None)
             cmap = col_maps[col_counter % len(col_maps)]
-            _plot_on_ax(ax, d, class_obj, count_d, threshold_filt,
-                        plot_type, ax_unit, colormap=cmap, label_str=label_str,
-                        x_lim=x_lim, y_lim=y_lim, contour_color=True, show_colorbar=False)
+            _plot_on_ax(ax, d, class_obj, count_d, threshold_filt = threshold_filt,
+                        grid_filt = grid_filt,
+                        plot_type = plot_type, ax_unit = ax_unit, colormap=cmap, label_str=label_str,
+                        x_lim=x_lim, y_lim=y_lim, contour_color=True, show_colorbar=False, first_index=first_index, resolution_scaling=resolution_scaling)
             col_counter += 1
-
+            first_index = False
     fig.tight_layout()
     fig.subplots_adjust(left=0.18, right=0.98, bottom=0.18, top=0.98)
     plt.show()
