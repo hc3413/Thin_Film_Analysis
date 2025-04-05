@@ -22,9 +22,9 @@ def _plot_ttw_on_ax(
     y = d['Intensity']
 
     ax.plot(x, y, label=label_str)
-    ax.set_xlabel(r"$2\theta \,(\mathrm{degrees})$", fontsize=16)
-    ax.set_ylabel(r"Intensity", fontsize=16)
-    ax.set_title(r"Two Theta vs Intensity", fontsize=14)
+    ax.set_xlabel(r"$2\theta \,(\mathrm{degrees})$")
+    ax.set_ylabel(r"Intensity")
+    #ax.set_title(r"Two Theta vs Intensity")
 
     ax.set_yscale('log')  # Set y-axis to logarithmic scale
     
@@ -33,11 +33,8 @@ def _plot_ttw_on_ax(
     if y_lim is not None:
         ax.set_ylim(y_lim)
 
-    ax.tick_params(axis='both', which='major', labelsize=14, length=4, width=0.6)
-    ax.tick_params(axis='both', which='minor', labelsize=14, length=2, width=0.4)
-
     if label_str is not None:
-        ax.legend(loc='upper right', framealpha=0.4)
+        ax.legend()
 
 
 def ttw_plot_sep(
@@ -75,8 +72,6 @@ def ttw_plot_sep(
             _plot_ttw_on_ax(ax, d, label_str=label_str, x_lim=x_lim, y_lim=y_lim)
             subplot_counter += 1
             
-    fig.tight_layout()
-    fig.subplots_adjust(left=0.18, right=0.98, bottom=0.18, top=0.98)
     plt.show()
     return fig
 
@@ -85,30 +80,58 @@ def ttw_plot_same(
     dat: Tuple[Any],
     x_lim: Optional[Tuple[float, float]] = None,
     y_lim: Optional[Tuple[float, float]] = None,
+    norm_plot: bool = False,
 ) -> Figure:
     """
-    Plot multiple datasets on a single set of axes.
+    Plot multiple datasets on a single set of axes, with an option to normalize to their own maximum intensity.
 
     Parameters:
-        dat  : A sequence of objects containing data. Each object is expected to have
-               a 'ttw_df' attribute (a sequence of dictionaries with data) and may have
-               a 'plot_string' attribute.
-        x_lim: Optional tuple specifying the x-axis limits (min, max).
-        y_lim: Optional tuple specifying the y-axis limits (min, max).
+        dat      : A sequence of objects containing data. Each object is expected to have
+                   a 'ttw_df' attribute (a sequence of dictionaries with data) and may have
+                   a 'plot_string' attribute.
+        x_lim    : Optional tuple specifying the x-axis limits (min, max).
+        y_lim    : Optional tuple specifying the y-axis limits (min, max).
+        norm_plot: Boolean indicating whether to normalize the data to their own maximum intensity.
 
     Returns:
         The matplotlib Figure object containing the plot.
     """
-    fig, ax = plt.subplots(figsize=(15, 5.5))
+    fig, ax = plt.subplots()
     
     for class_obj in dat:
         for count_d, d in enumerate(class_obj.ttw_df):
+            if norm_plot:
+                # Normalize intensity by the maximum intensity of the current dataset
+                max_intensity = d['Intensity'].max()
+                d['Normalized_Intensity'] = d['Intensity'] / max_intensity
+                plot_data = d.assign(Intensity=d['Normalized_Intensity'])  # Use normalized data
+            else:
+                plot_data = d  # Use raw data
+            
             label_str = (class_obj.plot_string[count_d]
                          if hasattr(class_obj, 'plot_string') else None)
-            _plot_ttw_on_ax(ax, d, label_str=label_str, x_lim=x_lim, y_lim=y_lim)
+            _plot_ttw_on_ax(
+                ax, 
+                plot_data, 
+                label_str=label_str, 
+                x_lim=x_lim, 
+                y_lim=y_lim
+            )
     
-    fig.tight_layout()
-    fig.subplots_adjust(left=0.18, right=0.98, bottom=0.18, top=0.98)
+    ax.set_ylabel("Intensity (a.u.)")  # Update y-axis label
+    ax.set_yticks([])  # Remove y-axis ticks
+    ax.yaxis.set_ticklabels([])  # Remove y-axis numbers
     plt.show()
     return fig
 
+
+def update_plot_string(ttw):
+    '''Update the plot_str variable for each file in the tuple.'''
+    # Loop over the samples in the multiple ttw objects
+    for t in ttw: 
+        # Loop over the files within each sample folder
+        for i in range(len(t.file_name)):
+            new_plot_str = input(f"Enter new plot string for {t.file_name[i]} (current: {t.plot_string[i]}): ")
+            t.plot_string[i] = new_plot_str if new_plot_str else t.plot_string[i] #ppms.material + ' - ' + 
+            print(f"New plot string for {t.file_name[i]}: {t.plot_string[i]}")
+    return ttw

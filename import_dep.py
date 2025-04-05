@@ -25,10 +25,17 @@ from matplotlib.ticker import LogFormatter
 from matplotlib.ticker import LogFormatterSciNotation
 from typing import Optional, Tuple, Any, Dict
 
+
 import scipy
 from scipy.optimize import fsolve
 from scipy.stats import linregress
 import matplotlib.patches as mpatches
+
+import scienceplots
+import readline
+from cycler import cycler
+import seaborn as sns
+import matplotlib.gridspec as gridspec
 
 
 
