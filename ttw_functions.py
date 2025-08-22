@@ -44,6 +44,12 @@ def _plot_ttw_on_ax(
     ax.set_xlabel(r"$2\theta \,(\mathrm{degrees})$")
     ax.set_ylabel(r"Intensity")
     #ax.set_title(r"Two Theta vs Intensity")
+    
+    ## Add reference dotted lines for the bulk phase in the positions they would be expected
+    ax.axvline(x=24.37, color='grey', linestyle='--', alpha=0.5)
+    ax.axvline(x=23.58, color='grey', linestyle='--', alpha=0.5)
+    ax.axvline(x=23.11, color='grey', linestyle='--', alpha=0.5)
+    
 
     if log_plot:
         ax.set_yscale('log')  # Set y-axis to logarithmic scale

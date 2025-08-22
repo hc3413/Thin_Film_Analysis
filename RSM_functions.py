@@ -115,6 +115,7 @@ def _plot_on_ax(
     # Invert the normalized intensity to get higher transparency for smaller values
     alpha_values = norm_log_intensity
     
+    
 
     # Generate plot based on plot_type
     if plot_type == 'scatter':
@@ -169,13 +170,17 @@ def _plot_on_ax(
     if ax_unit == 'lattice' and first_index == True:
         ax.scatter(4.14, 4.14, color='red', marker='+', s=100, label='BaSnO3 bulk')
         ax.scatter(4.035, 4.033, color='blue', marker='+', s=100, label='SrSnO3 bulk')
+        ax.scatter(4.05, 4.05, color='blue', marker='+', s=100, label='LaScO3 bulk')
         ax.axvline(x=3.905, color='green', linestyle='--', linewidth=1)
         ax.axhline(y=3.905, color='green', linestyle='--', linewidth=1)
         
     # Add guidelines for lattice plots
     if ax_unit == 'reciprocal' and first_index == True:
-        ax.scatter(1.526, 4.571, color='red', marker='+', s=100, label='BaSnO3 on STO')
-        ax.scatter(1.581, 4.555, color='green', marker='+', s=100, label='SrSnO3 on STO')
+        #ax.scatter(1.526, 4.571, color='red', marker='+', s=100, label='BaSnO3 on STO')
+        #ax.scatter(1.581, 4.555, color='green', marker='+', s=100, label='SrSnO3 on STO')
+        ax.scatter(2*np.pi/4.05, 6*np.pi/4.05, color='yellow', marker='+', s=100, label='LaScO3 bulk')
+        ax.scatter(2*np.pi/4.12, 6*np.pi/4.12, color='purple', marker='+', s=100, label='BaSnO3 bulk')
+        ax.scatter(2*np.pi/4.036, 6*np.pi/4.036, color='orange', marker='+', s=100, label='SrSnO3 bulk')
         #ax.axvline(x=1.61, color='green', linestyle='--', linewidth=1)
         #ax.axhline(y=1.61*3, color='green', linestyle='--', linewidth=1)
 
@@ -190,8 +195,8 @@ def _plot_on_ax(
     ax.tick_params(axis='both', which='minor', labelsize=14, length=2, width=0.4)
 
     # Add a legend if a label is provided
-    if label_str is not None:
-        ax.legend(loc='lower right', framealpha=0.4)
+    #if label_str is not None:
+    ax.legend(loc='lower right', framealpha=0.4)
 
 
 def create_custom_colormap(base_cmap='jet'):
@@ -228,6 +233,7 @@ def RSM_plot_sep(
     plot_type: str = 'scatter',
     ax_unit: str = 'reciprocal',
     resolution_scaling: Optional[float] = None, # New parameter to scale the resolution of the meshgrid
+    string_suppress: bool = False,  # New parameter to suppress string labels
 ) -> Figure:
     """
     Plot multiple datasets in separate subplots.
@@ -259,8 +265,13 @@ def RSM_plot_sep(
         first_index = True # New parameter to prevent double plotting of labels
         for count_d, d in enumerate(class_obj.qxqz_df):
             ax = fig.add_subplot(gs[subplot_counter // 2, subplot_counter % 2])
-            label_str = (class_obj.plot_string[count_d]
-                         if hasattr(class_obj, 'plot_string') else None)
+            
+            # Only add the label string if string_suppress is False
+            if string_suppress:
+                label_str = None
+            else:
+                label_str = (class_obj.plot_string[count_d] if hasattr(class_obj, 'plot_string') else None)
+                
             _plot_on_ax(ax, d, class_obj, count_d, threshold_filt = threshold_filt,
                         grid_filt = grid_filt,
                         plot_type = plot_type, ax_unit = ax_unit, colormap= custom_cmap , label_str=label_str,
