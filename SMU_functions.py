@@ -2,6 +2,50 @@
 from import_dep import *
 from scipy.signal import medfilt
 
+def auto_scale_current(current_data):
+    """
+    Automatically scale current data to appropriate units (A, mA, μA, nA).
+    
+    Parameters:
+        current_data : array-like
+            Current data in Amperes
+    
+    Returns:
+        tuple: (scaled_data, unit_string, scale_factor)
+    """
+    max_abs_current = np.max(np.abs(current_data))
+    
+    if max_abs_current >= 1e-3:  # >= 1 mA
+        return current_data, "A", 1
+    elif max_abs_current >= 1e-6:  # >= 1 μA  
+        return current_data * 1e3, "mA", 1e3
+    elif max_abs_current >= 1e-9:  # >= 1 nA
+        return current_data * 1e6, "μA", 1e6
+    else:  # < 1 nA
+        return current_data * 1e9, "nA", 1e9
+
+def auto_scale_resistance(resistance_data):
+    """
+    Automatically scale resistance data to appropriate units (Ω, kΩ, MΩ, GΩ).
+    
+    Parameters:
+        resistance_data : array-like
+            Resistance data in Ohms
+    
+    Returns:
+        tuple: (scaled_data, unit_string, scale_factor)
+    """
+    max_abs_resistance = np.max(np.abs(resistance_data[np.isfinite(resistance_data)]))
+    
+    if max_abs_resistance >= 1e9:  # >= 1 GΩ
+        return resistance_data / 1e9, r"G$\Omega$", 1e-9
+    elif max_abs_resistance >= 1e6:  # >= 1 MΩ
+        return resistance_data / 1e6, r"M$\Omega$", 1e-6
+    elif max_abs_resistance >= 1e3:  # >= 1 kΩ
+        return resistance_data / 1e3, r"k$\Omega$", 1e-3
+    else:  # < 1 kΩ
+        return resistance_data, r"$\Omega$", 1
+
 def plot_IV(smu_data: list, 
            run_nums: Optional[list] = None,
            x_lim: Optional[Tuple[float, float]] = None,
@@ -9,6 +53,7 @@ def plot_IV(smu_data: list,
            log_plot: bool = False,
            plot_arrows: bool = False,
            line_width: Optional[float] = None,
+           markersize: Optional[float] = None,
            plot_key: bool = True,
            export_data: bool = False,
            output_SMU: Optional[str] = None,
@@ -26,6 +71,7 @@ def plot_IV(smu_data: list,
         log_plot          : Whether to use logarithmic scale for y-axis.
         plot_arrows       : Whether to add directional arrows showing voltage sweep direction.
         line_width        : Optional line width for the plot. If None, uses default.
+        markersize        : Optional marker size for the plot. If None, uses rcParams or default.
         plot_key          : Whether to show the legend/key. Default is True.
         export_data       : Whether to use export styling and generate output path.
         output_SMU        : Directory path for saving figures when export_data=True.
@@ -45,13 +91,35 @@ def plot_IV(smu_data: list,
     
     fig, ax = plt.subplots(figsize=fig_size)
     
+    # Collect all current data to determine appropriate scaling
+    all_current_data = []
+    for smu_obj in smu_data:
+        iv_data, plot_strings = smu_obj.get_iv_data(run_nums)
+        for df, label_str in zip(iv_data, plot_strings):
+            if not df.empty:
+                current_data = df['I_A']
+                # Apply x_lim masking if specified
+                if x_lim is not None:
+                    x = df['V_V']
+                    mask = (x >= x_lim[0]) & (x <= x_lim[1])
+                    current_data = current_data[mask]
+                all_current_data.extend(current_data.values)
+    
+    # Determine the best current scaling
+    if all_current_data:
+        _, current_unit, current_scale = auto_scale_current(np.array(all_current_data))
+    else:
+        current_unit = "A"
+        current_scale = 1
+    
+    # Now plot with the determined scaling
     for smu_obj in smu_data:
         iv_data, plot_strings = smu_obj.get_iv_data(run_nums)
         
         for df, label_str in zip(iv_data, plot_strings):
             if not df.empty:
                 x = df['V_V']
-                y = df['I_A']
+                y = df['I_A'] * current_scale  # Apply scaling for better units
                 
                 # Apply x_lim masking if specified to rescale y-axis appropriately
                 if x_lim is not None:
@@ -67,10 +135,12 @@ def plot_IV(smu_data: list,
                 if log_plot:
                     y = np.abs(y)
                 
-                # Plot the main line with optional line width
+                # Plot the main line with optional line width and markersize
                 plot_kwargs = {'label': label_str, 'marker': 'o'}
                 if line_width is not None:
                     plot_kwargs['linewidth'] = line_width
+                if markersize is not None:
+                    plot_kwargs['markersize'] = markersize
                 
                 line = ax.plot(x, y, **plot_kwargs)
                 
@@ -143,7 +213,7 @@ def plot_IV(smu_data: list,
                                                             mutation_scale=15))
     
     ax.set_xlabel(r"Voltage (V)")
-    ax.set_ylabel(r"Current (A)")
+    ax.set_ylabel(rf"Current ({current_unit})")
     ax.set_title(r"I-V Characteristics")
     
     if log_plot:
@@ -182,6 +252,7 @@ def plot_CV(smu_data: list,
            plot_Cp: bool = True,
            plot_Gp: bool = False,
            line_width: Optional[float] = None,
+           markersize: Optional[float] = None,
            plot_key: bool = True,
            export_data: bool = False,
            output_SMU: Optional[str] = None,
@@ -200,6 +271,7 @@ def plot_CV(smu_data: list,
         plot_Cp           : Whether to plot capacitance (Cp).
         plot_Gp           : Whether to plot conductance (Gp).
         line_width        : Optional line width for the plot. If None, uses default.
+        markersize        : Optional marker size for the plot. If None, uses rcParams or default.
         plot_key          : Whether to show the legend/key. Default is True.
         export_data       : Whether to use export styling and generate output path.
         output_SMU        : Directory path for saving figures when export_data=True.
@@ -243,6 +315,8 @@ def plot_CV(smu_data: list,
                     plot_kwargs_cp = {'label': rf"{label_str} ($C_p$)", 'marker': 'o'}
                     if line_width is not None:
                         plot_kwargs_cp['linewidth'] = line_width
+                    if markersize is not None:
+                        plot_kwargs_cp['markersize'] = markersize
                     ax.plot(x, y_cp, **plot_kwargs_cp)
                 
                 if plot_Gp:
@@ -250,6 +324,8 @@ def plot_CV(smu_data: list,
                     plot_kwargs_gp = {'label': rf"{label_str} ($G_p$)", 'marker': 's', 'linestyle': '--'}
                     if line_width is not None:
                         plot_kwargs_gp['linewidth'] = line_width
+                    if markersize is not None:
+                        plot_kwargs_gp['markersize'] = markersize
                     ax.plot(x, y_gp, **plot_kwargs_gp)
     
     ax.set_xlabel(r"DC Voltage (V)")
@@ -298,6 +374,7 @@ def plot_resistance(smu_data: list,
                    log_plot: bool = True,
                    plot_arrows: bool = False,
                    line_width: Optional[float] = None,
+                   markersize: Optional[float] = None,
                    plot_key: bool = True,
                    export_data: bool = False,
                    output_SMU: Optional[str] = None,
@@ -315,6 +392,7 @@ def plot_resistance(smu_data: list,
         log_plot          : Whether to use logarithmic scale for y-axis.
         plot_arrows       : Whether to add directional arrows showing voltage sweep direction.
         line_width        : Optional line width for the plot. If None, uses default.
+        markersize        : Optional marker size for the plot. If None, uses rcParams or default.
         plot_key          : Whether to show the legend/key. Default is True.
         export_data       : Whether to use export styling and generate output path.
         output_SMU        : Directory path for saving figures when export_data=True.
@@ -334,13 +412,38 @@ def plot_resistance(smu_data: list,
     
     fig, ax = plt.subplots(figsize=fig_size)
     
+    # Collect all resistance data to determine appropriate scaling
+    all_resistance_data = []
+    for smu_obj in smu_data:
+        iv_data, plot_strings = smu_obj.get_iv_data(run_nums)
+        for df, label_str in zip(iv_data, plot_strings):
+            if not df.empty:
+                resistance_data = df['R_Ohm']
+                # Filter out infinite and NaN values
+                mask = np.isfinite(resistance_data)
+                resistance_clean = resistance_data[mask]
+                # Apply x_lim masking if specified
+                if x_lim is not None:
+                    x = df['V_V'][mask]
+                    x_mask = (x >= x_lim[0]) & (x <= x_lim[1])
+                    resistance_clean = resistance_clean[x_mask]
+                all_resistance_data.extend(resistance_clean.values)
+    
+    # Determine the best resistance scaling
+    if all_resistance_data:
+        _, resistance_unit, resistance_scale = auto_scale_resistance(np.array(all_resistance_data))
+    else:
+        resistance_unit = "Ω"
+        resistance_scale = 1
+    
+    # Now plot with the determined scaling
     for smu_obj in smu_data:
         iv_data, plot_strings = smu_obj.get_iv_data(run_nums)
         
         for df, label_str in zip(iv_data, plot_strings):
             if not df.empty:
                 x = df['V_V']
-                y = df['R_Ohm']
+                y = df['R_Ohm'] * resistance_scale  # Apply scaling for better units
                 # Filter out infinite and NaN values
                 mask = np.isfinite(y)
                 x_clean = x[mask]
@@ -356,10 +459,12 @@ def plot_resistance(smu_data: list,
                     if len(x_clean) == 0:
                         continue
                 
-                # Plot the main line with optional line width
+                # Plot the main line with optional line width and markersize
                 plot_kwargs = {'label': label_str, 'marker': 'o'}
                 if line_width is not None:
                     plot_kwargs['linewidth'] = line_width
+                if markersize is not None:
+                    plot_kwargs['markersize'] = markersize
                 
                 line = ax.plot(x_clean, y_clean, **plot_kwargs)
                 
@@ -431,7 +536,7 @@ def plot_resistance(smu_data: list,
                                                             mutation_scale=15))
     
     ax.set_xlabel(r"Voltage (V)")
-    ax.set_ylabel(r"Resistance ($\Omega$)")
+    ax.set_ylabel(rf"Resistance ({resistance_unit})")
     ax.set_title(r"Resistance vs Voltage")
     
     if log_plot:

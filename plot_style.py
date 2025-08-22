@@ -2,7 +2,7 @@
 from import_dep import *
 
 
-def set_plot_style(export_data = False, powerpoint_data = False, use_tex=True):
+def set_plot_style(export_data = False, powerpoint_data = False, use_tex=True, markersize=None):
     """
     Set publication-quality plot styles.
     
@@ -10,6 +10,8 @@ def set_plot_style(export_data = False, powerpoint_data = False, use_tex=True):
     -----------
     use_tex : bool
         Whether to use LaTeX for rendering text (default: True)
+    markersize : float, optional
+        Override the default markersize. If None, uses default (4.0 for export, 6.0 for display)
     """
     
     # Set the figure size based on whether we are visualising or exporting the data
@@ -58,7 +60,7 @@ def set_plot_style(export_data = False, powerpoint_data = False, use_tex=True):
         
         # Line settings
         'lines.linewidth': 1.0,
-        'lines.markersize': 4.0,
+        'lines.markersize': markersize if markersize is not None else (4.0 if export_data else 6.0),
         # Errorbar settings
         'errorbar.capsize': 0,
         
