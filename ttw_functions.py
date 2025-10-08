@@ -1,6 +1,24 @@
 #import all the libraries needed
 from import_dep import *
 
+def calculate_002_peak_position(lattice_param, wavelength=1.5406):
+    """
+    Calculate the 2θ position for the 002 peak given a lattice parameter.
+    
+    Parameters:
+        lattice_param : float
+            Lattice parameter in Angstroms
+        wavelength : float
+            X-ray wavelength in Angstroms (default: Cu Kα = 1.5406 Å)
+    
+    Returns:
+        float : 2θ position in degrees
+    """
+    d_spacing = lattice_param / 2  # For 002 reflection: d = a/2
+    theta_rad = np.arcsin(wavelength / (2 * d_spacing))  # Bragg's law: λ = 2d sinθ
+    two_theta_deg = 2 * np.degrees(theta_rad)
+    return two_theta_deg
+
 def _plot_ttw_on_ax(
     ax: plt.Axes,
     d: pd.DataFrame,
@@ -45,11 +63,23 @@ def _plot_ttw_on_ax(
     ax.set_ylabel(r"Intensity")
     #ax.set_title(r"Two Theta vs Intensity")
     
-    ## Add reference dotted lines for the bulk phase in the positions they would be expected
-    ax.axvline(x=24.37, color='grey', linestyle='--', alpha=0.5)
-    ax.axvline(x=23.58, color='grey', linestyle='--', alpha=0.5)
-    ax.axvline(x=23.11, color='grey', linestyle='--', alpha=0.5)
+    ## Define lattice parameters (in Angstroms)
+    lattice_STO = 3.905
+    lattice_LSO = 4.052
+    lattice_BSO = 4.116
+    lattice_SSO = 4.036
     
+    ## Calculate and add reference dotted lines for the 002 peaks
+    peak_BSO = calculate_002_peak_position(lattice_BSO)
+    peak_LSO = calculate_002_peak_position(lattice_LSO)
+    peak_STO = calculate_002_peak_position(lattice_STO)
+    peak_SSO = calculate_002_peak_position(lattice_SSO)
+    
+    #ax.axvline(x=peak_BSO, color='grey', linestyle='--', alpha=0.5)
+    #ax.axvline(x=peak_LSO, color='grey', linestyle='--', alpha=0.5)
+    ax.axvline(x=peak_STO, color='grey', linestyle='--', alpha=0.5)
+    ax.axvline(x=peak_SSO, color='grey', linestyle='--', alpha=0.5)
+
 
     if log_plot:
         ax.set_yscale('log')  # Set y-axis to logarithmic scale
@@ -179,9 +209,16 @@ def update_plot_string(ttw):
     '''Update the plot_str variable for each file in the tuple.'''
     # Loop over the samples in the multiple ttw objects
     for t in ttw: 
+        # Convert tuple to list for modification
+        plot_string_list = list(t.plot_string)
+        
         # Loop over the files within each sample folder
         for i in range(len(t.file_name)):
             new_plot_str = input(f"Enter new plot string for {t.file_name[i]} (current: {t.plot_string[i]}): ")
-            t.plot_string[i] = new_plot_str if new_plot_str else t.plot_string[i] #ppms.material + ' - ' + 
-            print(f"New plot string for {t.file_name[i]}: {t.plot_string[i]}")
+            plot_string_list[i] = new_plot_str if new_plot_str else t.plot_string[i] #ppms.material + ' - ' + 
+            print(f"New plot string for {t.file_name[i]}: {plot_string_list[i]}")
+        
+        # Convert back to tuple and assign
+        t.plot_string = tuple(plot_string_list)
+        
     return ttw

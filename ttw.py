@@ -146,3 +146,72 @@ class ttw:
         ax.set_ylabel('Intensity')
         ax.legend()
         plt.show()
+    
+    def select_measurements(self, indices):
+        """
+        Select specific measurements by index and create a new ttw object with only those measurements.
+        
+        Parameters:
+            indices : list or int
+                Index or list of indices of the measurements to keep (0-based indexing)
+        
+        Returns:
+            ttw : A new ttw object containing only the selected measurements
+        """
+        # Convert single index to list
+        if isinstance(indices, int):
+            indices = [indices]
+        
+        # Validate indices
+        if not self.ttw_df:
+            print("No data loaded to select from")
+            return self
+        
+        max_idx = len(self.ttw_df) - 1
+        invalid_indices = [i for i in indices if i < 0 or i > max_idx]
+        if invalid_indices:
+            print(f"Invalid indices: {invalid_indices}. Available indices: 0-{max_idx}")
+            return self
+        
+        # Create a new ttw object (copy of current one)
+        new_ttw = ttw.__new__(ttw)  # Create without calling __init__
+        
+        # Copy basic attributes
+        new_ttw.root_XRD = self.root_XRD
+        new_ttw.folder_name = self.folder_name
+        new_ttw.folder_path = self.folder_path
+        new_ttw.wavelength = self.wavelength
+        new_ttw.points_per_scan = self.points_per_scan
+        
+        # Select only the specified indices
+        new_ttw.ttw_df = tuple([self.ttw_df[i] for i in indices])
+        new_ttw.ttw_np = tuple([self.ttw_np[i] for i in indices])
+        new_ttw.file_name = tuple([self.file_name[i] for i in indices])
+        new_ttw.plot_string = tuple([self.plot_string[i] for i in indices])
+        
+        # Select corresponding lattice parameter data if it exists
+        if self.lat_param_df:
+            new_ttw.lat_param_df = tuple([self.lat_param_df[i] for i in indices])
+            new_ttw.lat_param_np = tuple([self.lat_param_np[i] for i in indices])
+        else:
+            new_ttw.lat_param_df = tuple()
+            new_ttw.lat_param_np = tuple()
+        
+        return new_ttw
+    
+    def list_measurements(self):
+        """
+        Print a list of all available measurements with their indices and filenames.
+        """
+        if not self.ttw_df:
+            print("No data loaded")
+            return
+        
+        print(f"Available measurements in {self.folder_name}:")
+        print("-" * 50)
+        for i, (filename, plot_str) in enumerate(zip(self.file_name, self.plot_string)):
+            print(f"Index {i}: {filename}")
+            print(f"  Plot string: {plot_str}")
+            if self.ttw_df[i] is not None:
+                print(f"  Data points: {len(self.ttw_df[i])}")
+            print()
