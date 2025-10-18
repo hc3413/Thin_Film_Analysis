@@ -12,19 +12,19 @@ class RSM:
         # Construct the full path to the folder from the root directory and folder name
         self.folder_path: Path = self.root_XRD / self.folder_name
            
-        # Tuple storing tuples of the raw data for each RSM in case multiple exist in the folder
-        self.RSM_df: tuple = None
-        self.RSM_np: tuple = None
-        self.file_name: tuple = None
-        self.plot_string: tuple = None
+        # List storing the raw data for each RSM in case multiple exist in the folder
+        self.RSM_df: list = []
+        self.RSM_np: list = []
+        self.file_name: list = []
+        self.plot_string: list = []
         
-        # tuple to store the processed qx and qz vs intensity values
-        self.qxqz_df: tuple = None 
-        self.qxqz_np: tuple = None 
+        # list to store the processed qx and qz vs intensity values
+        self.qxqz_df: list = [] 
+        self.qxqz_np: list = [] 
         
-        # tuple to store the lattice parameters vs intensity values
-        self.lat_param_df: tuple = None
-        self.lat_param_np: tuple = None
+        # list to store the lattice parameters vs intensity values
+        self.lat_param_df: list = []
+        self.lat_param_np: list = []
         
         # Wavelength of the X-ray source in Ångstroms is 1.5405980 by default but can be changed in the class initialization
         self.wavelength: float = wavelength
@@ -179,9 +179,10 @@ class RSM:
                 print("Error: Number of 2Theta unique values does not match the number of points per scan extracted from the file.")
             
             # Reshape and transpose the data to a 3D array with dimensions (2Theta, Omega, 3) or (Qx, Qz, Intensity)
-            n_reshaped = np.reshape(ttw, (omega_unique,twotheta_unique,  3))
-            q_reshaped = np.reshape(self.qxqz_np, (omega_unique,twotheta_unique,  3))
-            l_reshaped = np.reshape(self.lat_param_np, (omega_unique,twotheta_unique,  3))
+            # FIX: Index the arrays properly using [count] to get the correct file's data
+            n_reshaped = np.reshape(ttw, (omega_unique, twotheta_unique, 3))
+            q_reshaped = np.reshape(self.qxqz_np[count], (omega_unique, twotheta_unique, 3))
+            l_reshaped = np.reshape(self.lat_param_np[count], (omega_unique, twotheta_unique, 3))
             
             # Transpose the reshaped arrays to move 2Theta/Qx/a to the first dimension and Omega/Qz/c to the second dimension
             n_reshaped_transposed = np.transpose(n_reshaped, (1,0,2))
@@ -192,7 +193,7 @@ class RSM:
             RSM_np_reshaped.append(n_reshaped_transposed)
             qxqz_np_reshaped.append(q_reshaped_transposed)
             lat_param_np_reshaped.append(l_reshaped_transposed)
-            print(f'{self.plot_string} shape = {n_reshaped_transposed.shape}')
+            print(f'{self.plot_string[count]} shape = {n_reshaped_transposed.shape}')
 
         
         # Update self.RSM_np with the reshaped arrays
