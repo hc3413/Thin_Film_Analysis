@@ -28,6 +28,7 @@ def _plot_ttw_on_ax(
     linear_subtraction: bool = False,
     log_plot: bool = True,
     med_filt: int = 0,
+    offset_factor: float = 1.0,
 ) -> None:
     """
     A helper function to plot two theta vs intensity on the provided axis.
@@ -41,6 +42,8 @@ def _plot_ttw_on_ax(
         linear_subtraction: Whether to subtract a linear fit from intensity data.
         log_plot          : Whether to use logarithmic scale for y-axis.
         med_filt          : Kernel size for median filter. If 0, no filtering is applied.
+        offset_factor     : Multiplicative factor to offset the plot. For log scale, this creates
+                           uniform visual spacing (e.g., 10 = 1 decade offset).
     """
     x = d['Angle']
     y = d['Intensity']
@@ -57,11 +60,14 @@ def _plot_ttw_on_ax(
     if med_filt > 0:
         from scipy.signal import medfilt
         y = medfilt(y, kernel_size=med_filt)
+    
+    # Apply offset (multiplicative for log scale compatibility)
+    y = y * offset_factor
 
     ax.plot(x, y, label=label_str)
     ax.set_xlabel(r"$2\theta \,(\mathrm{degrees})$")
-    ax.set_ylabel(r"Intensity")
-    #ax.set_title(r"Two Theta vs Intensity")
+    # Default y-axis label (may be overridden in ttw_plot_same if offset is used)
+    ax.set_ylabel(r"Intensity (a.u.)")
     
     ## Define lattice parameters (in Angstroms)
     lattice_STO = 3.905
@@ -139,7 +145,8 @@ def ttw_plot_sep(
                 y_lim=y_lim,
                 linear_subtraction=linear_subtraction,
                 log_plot=log_plot,
-                med_filt=med_filt
+                med_filt=med_filt,
+                offset_factor=1.0  # No offset for separate plots
             )
             subplot_counter += 1
             
@@ -155,6 +162,7 @@ def ttw_plot_same(
     linear_subtraction: bool = False,
     log_plot: bool = True,
     med_filt: int = 0,
+    offset: Optional[float] = None,
 ) -> Figure:
     """
     Plot multiple datasets on a single set of axes, with an option to normalize to their own maximum intensity.
@@ -169,11 +177,16 @@ def ttw_plot_same(
         linear_subtraction: Whether to subtract a linear fit from intensity data.
         log_plot          : Whether to use logarithmic scale for y-axis.
         med_filt          : Kernel size for median filter. If 0, no filtering is applied.
+        offset            : Multiplicative offset factor between successive plots. In log scale, each
+                           successive plot is multiplied by offset^n (e.g., offset=10 gives 1 decade
+                           spacing, offset=100 gives 2 decades). If None, no offset is applied.
 
     Returns:
         The matplotlib Figure object containing the plot.
     """
     fig, ax = plt.subplots()
+    
+    plot_counter = 0  # Track which plot we're on for offsetting
     
     for class_obj in dat:
         for count_d, d in enumerate(class_obj.ttw_df):
@@ -185,6 +198,12 @@ def ttw_plot_same(
             else:
                 plot_data = d  # Use raw data
             
+            # Calculate offset factor for this plot
+            if offset is not None:
+                offset_factor = offset ** plot_counter
+            else:
+                offset_factor = 1.0
+            
             label_str = (class_obj.plot_string[count_d]
                          if hasattr(class_obj, 'plot_string') else None)
             _plot_ttw_on_ax(
@@ -195,12 +214,23 @@ def ttw_plot_same(
                 y_lim=y_lim,
                 linear_subtraction=linear_subtraction,
                 log_plot=log_plot,
-                med_filt=med_filt
+                med_filt=med_filt,
+                offset_factor=offset_factor
             )
+            
+            plot_counter += 1  # Increment for next plot
     
-    ax.set_ylabel("Intensity (a.u.)")  # Update y-axis label
-    ax.set_yticks([])  # Remove y-axis ticks
-    ax.yaxis.set_ticklabels([])  # Remove y-axis numbers
+    # Override y-axis label when offset is applied
+    if offset is not None:
+        # With offset, absolute values are meaningless
+        # Add "Log" prefix for log scale since tick marks are removed (not visually obvious)
+        if log_plot:
+            ax.set_ylabel(r"Log Intensity (a.u., offset)")
+        else:
+            ax.set_ylabel(r"Intensity (a.u., offset)")
+        ax.set_yticks([])  # Remove y-axis ticks
+        ax.yaxis.set_ticklabels([])  # Remove y-axis numbers
+    
     plt.show()
     return fig
 

@@ -179,7 +179,7 @@ class RSM:
                 print("Error: Number of 2Theta unique values does not match the number of points per scan extracted from the file.")
             
             # Reshape and transpose the data to a 3D array with dimensions (2Theta, Omega, 3) or (Qx, Qz, Intensity)
-            # FIX: Index the arrays properly using [count] to get the correct file's data
+            # Index the arrays using [count] to get each file's data
             n_reshaped = np.reshape(ttw, (omega_unique, twotheta_unique, 3))
             q_reshaped = np.reshape(self.qxqz_np[count], (omega_unique, twotheta_unique, 3))
             l_reshaped = np.reshape(self.lat_param_np[count], (omega_unique, twotheta_unique, 3))
