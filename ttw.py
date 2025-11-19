@@ -40,7 +40,7 @@ class ttw:
         ttw_np = [] # list to store the numpy arrays
         
         # Get a list of all the files in the folder as an iterator of path objects
-        files = [f for f in self.folder_path.iterdir() if f.suffix in ['.csv', '.txt'] and ('2tw' in f.stem or 'GIXRD' in f.stem)]
+        files = [f for f in self.folder_path.iterdir() if f.suffix in ['.csv', '.txt'] and ('2tw' in f.stem or 'GIXRD' in f.stem or '2thetaomega' in f.stem)]
         # Check if no files were found
         if not files:
             print("Error: No files with .csv or .txt extension were found with 2tw in their name.")

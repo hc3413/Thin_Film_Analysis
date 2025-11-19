@@ -81,7 +81,7 @@ def _plot_ttw_on_ax(
     peak_STO = calculate_002_peak_position(lattice_STO)
     peak_SSO = calculate_002_peak_position(lattice_SSO)
     
-    #ax.axvline(x=peak_BSO, color='grey', linestyle='--', alpha=0.5)
+    ax.axvline(x=peak_BSO, color='grey', linestyle='--', alpha=0.5)
     #ax.axvline(x=peak_LSO, color='grey', linestyle='--', alpha=0.5)
     ax.axvline(x=peak_STO, color='grey', linestyle='--', alpha=0.5)
     ax.axvline(x=peak_SSO, color='grey', linestyle='--', alpha=0.5)

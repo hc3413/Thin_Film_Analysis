@@ -168,9 +168,9 @@ def _plot_on_ax(
             
     # Add guidelines for lattice plots
     if ax_unit == 'lattice' and first_index == True:
-        ax.scatter(4.14, 4.14, color='red', marker='+', s=100, label='BaSnO3 bulk')
-        ax.scatter(4.035, 4.033, color='blue', marker='+', s=100, label='SrSnO3 bulk')
-        ax.scatter(4.05, 4.05, color='blue', marker='+', s=100, label='LaScO3 bulk')
+        ax.scatter(4.12, 4.12, color='purple', marker='+', s=100, label='BaSnO3 bulk')
+        ax.scatter(4.035, 4.033, color='orange', marker='+', s=100, label='SrSnO3 bulk')
+        ax.scatter(4.05, 4.05, color='yellow', marker='+', s=100, label='LaScO3 bulk')
         ax.axvline(x=3.905, color='green', linestyle='--', linewidth=1)
         ax.axhline(y=3.905, color='green', linestyle='--', linewidth=1)
         
