@@ -87,7 +87,7 @@ def create_crystal_system(nx, ny, nz,
 def calculate_xrd_vectorized(lattice_array, height_map, tilt_array,
                              two_theta_range=(40,46), wavelength=1.5406,
                              attenuation_length_nm=0, instrumental_broadening=0,
-                             n_points=3000, chunk_size=2000):
+                             n_points=3000, chunk_size=2000, normalize=True):
     """
     Compute XRD pattern from columns with optional absorption and instrumental broadening.
     Returns (two_theta, intensity_normalized).
@@ -159,11 +159,11 @@ def calculate_xrd_vectorized(lattice_array, height_map, tilt_array,
         intensity_total = convolve(intensity_total, kernel, mode='same')
 
     # normalize
-    if intensity_total.max() > 0:
+    if normalize and intensity_total.max() > 0:
         intensity_total = intensity_total / intensity_total.max()
 
     elapsed = time.time() - start_time
-    print(f"XRD calc finished in {elapsed:.3f}s (columns={n_columns})")
+    # print(f"XRD calc finished in {elapsed:.3f}s (columns={n_columns})")
     return two_theta, intensity_total
 
 
@@ -172,15 +172,23 @@ def run_xrd_fitting(ttw_object, peak_intensity, wavelength,
                     nx_fit=8, ny_fit=8, 
                     use_log_residual=True,
                     p0=None, bounds=None,
-                    tol=0.01, maxiter=None):
+                    tol=0.01, maxiter=None,
+                    background_intensity=None,
+                    film_scale=1.0):
     """
     Run the XRD fitting optimization.
     tol: Tolerance for termination (lower = more precise, slower). Default 0.01.
     maxiter: Maximum number of iterations.
+    background_intensity: Optional array of background intensity (same length as n_points=1000) to add to simulation.
+    film_scale: Scaling factor for the simulated film intensity (default 1.0). 
+                Use this when fitting a weak film peak against a strong substrate peak (normalized to 1).
     """
     
     print(f"Setting up optimization in range {fit_range} with grid {nx_fit}x{ny_fit}...")
-    print(f"Optimization settings: tol={tol}, maxiter={maxiter}")
+    bg_msg = "Enabled" if background_intensity is not None else "None"
+    print(f"Optimization settings: tol={tol}, maxiter={maxiter}, film_scale={film_scale:.4f}, background={bg_msg}")
+    if background_intensity is not None:
+        print("  -> Fitting target: (Simulated_Film * Scale) + Background_Intensity")
 
     # Extract and normalize data from ttw object
     df = ttw_object.ttw_df[0]
@@ -194,7 +202,10 @@ def run_xrd_fitting(ttw_object, peak_intensity, wavelength,
     y_fit = y_exp_norm[mask_fit]
 
     # Define Objective Function
+    iteration_count = 0
     def xrd_objective(params):
+        nonlocal iteration_count
+        iteration_count += 1
         """
         Objective function for optimization.
         Returns the sum of squared errors between simulation and experiment.
@@ -230,8 +241,20 @@ def run_xrd_fitting(ttw_object, peak_intensity, wavelength,
             wavelength=wavelength,
             attenuation_length_nm=att_len,
             instrumental_broadening=instr,
-            n_points=1000 
+            n_points=1000,
+            normalize=True # Always normalize the film peak to 1 (relative to itself) before adding background?
+            # WAIT: If we normalize film peak to 1, and background is scaled relative to film peak, then we can add them.
+            # The experimental data is normalized by peak_intensity (film peak).
+            # So film simulation should be normalized to 1.
         )
+        
+        # Scale the film simulation (if fitting weak film vs strong substrate)
+        int_sim = int_sim * film_scale
+
+        # Add background (STO) if provided
+        # background_intensity must be pre-scaled relative to the film peak intensity
+        if background_intensity is not None:
+            int_sim = int_sim + background_intensity
         
         # Interpolate Simulation to Experimental X-axis to calculate residual
         int_sim_interp = np.interp(x_fit, tt_sim, int_sim)
@@ -245,10 +268,11 @@ def run_xrd_fitting(ttw_object, peak_intensity, wavelength,
             # Linear scale fitting: Good for main Bragg peak position/width
             residual = np.sum((y_fit - int_sim_interp)**2)
         
+        print(f"Eval {iteration_count}: Residual = {residual:.6f}")
         return residual
 
     print(f"Initial parameters: {p0}")
-    print("Optimizing... (This may take 1-2 minutes)")
+    print("Optimizing... (maxiter controls algorithm iterations, not function evaluations)")
 
     # We use 'Powell' method because it handles the non-smooth nature of the 
     # integer thickness (nz) better than gradient-based methods like BFGS.
