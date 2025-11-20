@@ -1,7 +1,7 @@
 import numpy as np
 import time
 from scipy.signal import convolve
-from scipy.optimize import minimize
+from scipy.optimize import minimize, differential_evolution
 
 # ========== Core Functions: system generation, XRD calc, smoothing ==========
 
@@ -174,19 +174,42 @@ def run_xrd_fitting(ttw_object, peak_intensity, wavelength,
                     p0=None, bounds=None,
                     tol=0.01, maxiter=None,
                     background_intensity=None,
-                    film_scale=1.0):
+                    film_scale=1.0,
+                    use_global_search=True,
+                    de_maxiter=50,
+                    de_popsize=10):
     """
-    Run the XRD fitting optimization.
-    tol: Tolerance for termination (lower = more precise, slower). Default 0.01.
-    maxiter: Maximum number of iterations.
-    background_intensity: Optional array of background intensity (same length as n_points=1000) to add to simulation.
-    film_scale: Scaling factor for the simulated film intensity (default 1.0). 
-                Use this when fitting a weak film peak against a strong substrate peak (normalized to 1).
+    Run the XRD fitting optimization with optional global search.
+    
+    Parameters:
+    -----------
+    use_global_search : bool, default=True
+        If True, use Differential Evolution (global) followed by Powell (local refinement).
+        If False, use only Powell starting from p0.
+    de_maxiter : int, default=50
+        Maximum iterations for Differential Evolution (global search phase).
+        Typical: 30-100. Higher = more thorough but slower.
+    de_popsize : int, default=10
+        Population size multiplier for DE (actual pop = de_popsize * n_params).
+        Typical: 10-15. Higher = better exploration but slower.
+    tol : float, default=0.01
+        Tolerance for local refinement (Powell). Lower = more precise.
+    maxiter : int or None
+        Maximum iterations for local refinement (Powell). None = unlimited.
+    background_intensity : array or None
+        Optional background to add to simulation.
+    film_scale : float, default=1.0
+        Scaling factor for simulated film intensity.
     """
     
     print(f"Setting up optimization in range {fit_range} with grid {nx_fit}x{ny_fit}...")
     bg_msg = "Enabled" if background_intensity is not None else "None"
-    print(f"Optimization settings: tol={tol}, maxiter={maxiter}, film_scale={film_scale:.4f}, background={bg_msg}")
+    search_mode = "Global (DE) + Local (Powell)" if use_global_search else "Local (Powell only)"
+    print(f"Optimization mode: {search_mode}")
+    print(f"  Settings: film_scale={film_scale:.4f}, background={bg_msg}")
+    if use_global_search:
+        print(f"  DE params: maxiter={de_maxiter}, popsize={de_popsize} (total evals ~{de_maxiter * de_popsize * len(bounds)})")
+    print(f"  Powell params: tol={tol}, maxiter={maxiter}")
     if background_intensity is not None:
         print("  -> Fitting target: (Simulated_Film * Scale) + Background_Intensity")
 
@@ -202,29 +225,25 @@ def run_xrd_fitting(ttw_object, peak_intensity, wavelength,
     y_fit = y_exp_norm[mask_fit]
 
     # Define Objective Function
-    iteration_count = 0
+    iteration_count = [0]  # Use list to make it mutable in nested function
     def xrd_objective(params):
-        nonlocal iteration_count
-        iteration_count += 1
+        iteration_count[0] += 1
         """
         Objective function for optimization.
         Returns the sum of squared errors between simulation and experiment.
         """
         # Unpack parameters
-        # c_start: Lattice parameter at interface
-        # c_end:   Lattice parameter at surface (relaxed/perfect)
         c_start, c_end, t_nm, s_var, r_nm, mos, rel_len, att_len, instr = params
         
         # Derived parameters
-        # Use c_end (relaxed) as the reference for layer count
         nz_fit_layer = int((t_nm * 10) / c_end)
         r_layers = (r_nm * 10) / c_end
         
         # Generate System
         lat_arr, h_map, t_arr = create_crystal_system(
             nx_fit, ny_fit, nz_fit_layer,
-            c_end,                  # lattice_perfect (reference for spatial var)
-            [c_start, c_end],       # lattice_gradient [interface, surface]
+            c_end,
+            [c_start, c_end],
             mode='full',
             gradient_type='exponential',
             spatial_var_percent=s_var,
@@ -234,58 +253,89 @@ def run_xrd_fitting(ttw_object, peak_intensity, wavelength,
         )
         
         # Calculate XRD
-        # Use a moderate resolution for fitting speed (1000 points)
         tt_sim, int_sim = calculate_xrd_vectorized(
             lat_arr, h_map, t_arr,
-            two_theta_range=fit_range, # Use the fitting range!
+            two_theta_range=fit_range,
             wavelength=wavelength,
             attenuation_length_nm=att_len,
             instrumental_broadening=instr,
             n_points=1000,
-            normalize=True # Always normalize the film peak to 1 (relative to itself) before adding background?
-            # WAIT: If we normalize film peak to 1, and background is scaled relative to film peak, then we can add them.
-            # The experimental data is normalized by peak_intensity (film peak).
-            # So film simulation should be normalized to 1.
+            normalize=True
         )
         
-        # Scale the film simulation (if fitting weak film vs strong substrate)
+        # Scale the film simulation
         int_sim = int_sim * film_scale
 
-        # Add background (STO) if provided
-        # background_intensity must be pre-scaled relative to the film peak intensity
+        # Add background if provided
         if background_intensity is not None:
             int_sim = int_sim + background_intensity
         
-        # Interpolate Simulation to Experimental X-axis to calculate residual
+        # Interpolate to experimental x-axis
         int_sim_interp = np.interp(x_fit, tt_sim, int_sim)
         
-        # Calculate Residual (Least Squares)
+        # Calculate Residual
         if use_log_residual:
-            # Log scale fitting: Good for Laue oscillations
-            epsilon = 1e-6 # Avoid log(0)
+            epsilon = 1e-6
             residual = np.sum((np.log10(y_fit + epsilon) - np.log10(int_sim_interp + epsilon))**2)
         else:
-            # Linear scale fitting: Good for main Bragg peak position/width
             residual = np.sum((y_fit - int_sim_interp)**2)
         
-        print(f"Eval {iteration_count}: Residual = {residual:.6f}")
+        print(f"Eval {iteration_count[0]}: Residual = {residual:.6f}")
         return residual
 
-    print(f"Initial parameters: {p0}")
-    print("Optimizing... (maxiter controls algorithm iterations, not function evaluations)")
+    # Run optimization
+    if use_global_search:
+        print("\n=== STAGE 1: Global Search (Differential Evolution) ===")
+        iteration_count[0] = 0
+        
+        res_global = differential_evolution(
+            xrd_objective,
+            bounds=bounds,
+            strategy='best1bin',  # Good for physics problems
+            maxiter=de_maxiter,
+            popsize=de_popsize,
+            tol=0.1,  # Coarse tolerance for global search
+            polish=False,  # Don't use local polish yet
+            init='latinhypercube',  # Better initial sampling
+            atol=0,
+            updating='deferred',  # Faster parallelization (if available)
+            workers=1,  # Single thread (can be increased)
+            disp=False
+        )
+        
+        print(f"\nGlobal search complete: {res_global.nfev} evaluations")
+        print(f"Best global residual: {res_global.fun:.6f}")
+        
+        print("\n=== STAGE 2: Local Refinement (Powell) ===")
+        iteration_count[0] = 0
+        p0_refined = res_global.x
+        
+    else:
+        print("\n=== Local Optimization (Powell only) ===")
+        iteration_count[0] = 0
+        p0_refined = p0
 
-    # We use 'Powell' method because it handles the non-smooth nature of the 
-    # integer thickness (nz) better than gradient-based methods like BFGS.
+    # Local refinement with Powell
     options = {}
     if maxiter is not None:
         options['maxiter'] = maxiter
         
-    res = minimize(xrd_objective, p0, bounds=bounds, method='Powell', tol=tol, options=options)
+    res = minimize(
+        xrd_objective, 
+        p0_refined, 
+        bounds=bounds, 
+        method='Powell', 
+        tol=tol, 
+        options=options
+    )
 
-    print("\nOptimization Result:")
+    print("\n=== Optimization Complete ===")
     print(f"Success: {res.success}")
     print(f"Message: {res.message}")
     print(f"Final Residual: {res.fun:.6f}")
+    
+    if use_global_search:
+        print(f"Total evaluations: {res_global.nfev + res.nfev}")
     
     return res
 
