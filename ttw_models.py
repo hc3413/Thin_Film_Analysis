@@ -359,3 +359,261 @@ def find_peak(ttw_object, x_range):
         
     max_idx = np.argmax(y_subset)
     return x_subset[max_idx], y_subset[max_idx]
+
+
+def run_multi_peak_xrd_fitting(ttw_object, peak_labels, peak_intensities, wavelength,
+                                 fit_ranges, nx_fits, ny_fits,
+                                 use_log_residual=True,
+                                 p0_list=None, bounds_list=None,
+                                 use_global_search=True,
+                                 de_maxiter=50, de_popsize=10,
+                                 tol=0.01, maxiter=None,
+                                 background_intensity=None,
+                                 normalization_peak_intensity=None):
+    """
+    Multi-peak XRD fitting function. Fits multiple overlapping peaks simultaneously.
+    
+    Parameters
+    ----------
+    ttw_object : ttw object
+        Experimental data containing Angle and Intensity.
+    peak_labels : list of str
+        Labels for each peak (e.g., ['BSO', 'SSO']).
+    peak_intensities : list of float
+        Peak intensities for each film peak (for scaling).
+    wavelength : float
+        X-ray wavelength in Angstroms.
+    fit_ranges : list of tuple
+        Fitting range for each peak: [(min1, max1), (min2, max2), ...].
+    nx_fits, ny_fits : list of int
+        Grid sizes for each peak simulation.
+    use_log_residual : bool, default=True
+        If True, minimize in log-space (better for Laue oscillations).
+    p0_list : list of array-like, optional
+        Initial guesses for each peak's parameters (9 params each).
+    bounds_list : list of list of tuple, optional
+        Bounds for each peak's parameters.
+    use_global_search : bool, default=True
+        Use Differential Evolution before Powell refinement.
+    de_maxiter : int, default=50
+        Max iterations for DE.
+    de_popsize : int, default=10
+        Population size multiplier for DE.
+    tol : float, default=0.01
+        Tolerance for Powell minimization.
+    maxiter : int, optional
+        Max iterations for Powell.
+    background_intensity : array-like, optional
+        Pre-calculated background signal (e.g., from STO substrate).
+    normalization_peak_intensity : float, optional
+        Peak intensity for normalization (typically STO peak). If None, uses first peak intensity.
+    
+    Returns
+    -------
+    results : dict
+        Contains optimized parameters for each peak and optimization details.
+    """
+    
+    n_peaks = len(peak_labels)
+    
+    if normalization_peak_intensity is None:
+        normalization_peak_intensity = peak_intensities[0]
+    
+    print(f"\n{'='*70}")
+    print(f"Multi-Peak Fitting: {n_peaks} peaks ({', '.join(peak_labels)})")
+    print(f"{'='*70}")
+    
+    # Calculate overall fitting range
+    all_ranges = [r for r in fit_ranges]
+    overall_range = (min([r[0] for r in all_ranges]), max([r[1] for r in all_ranges]))
+    
+    print(f"Overall fitting range: {overall_range}")
+    for i, label in enumerate(peak_labels):
+        print(f"  {label}: {fit_ranges[i]}, grid {nx_fits[i]}x{ny_fits[i]}")
+    
+    search_mode = "Global (DE) + Local (Powell)" if use_global_search else "Local (Powell only)"
+    print(f"Optimization mode: {search_mode}")
+    bg_msg = "Enabled" if background_intensity is not None else "None"
+    print(f"  Background: {bg_msg}")
+    
+    # Extract and normalize experimental data
+    df = ttw_object.ttw_df[0]
+    x_exp = df['Angle'].values
+    y_exp = df['Intensity'].values
+    y_exp_norm = y_exp / normalization_peak_intensity
+    
+    # Prepare data for fitting (use overall range)
+    mask_fit = (x_exp >= overall_range[0]) & (x_exp <= overall_range[1])
+    x_fit = x_exp[mask_fit]
+    y_fit = y_exp_norm[mask_fit]
+    
+    # Calculate film scale factors
+    film_scales = [peak_int / normalization_peak_intensity for peak_int in peak_intensities]
+    print(f"\nFilm scale factors: {[f'{s:.4f}' for s in film_scales]}")
+    
+    # Flatten parameters: [peak1_params (9), peak2_params (9), ...]
+    total_params = n_peaks * 9
+    
+    # Flatten bounds
+    if bounds_list is None:
+        raise ValueError("bounds_list must be provided for multi-peak fitting")
+    bounds_flat = [b for bounds in bounds_list for b in bounds]
+    
+    # Flatten initial guess
+    if p0_list is None:
+        p0_flat = np.array([np.mean(b) for b in bounds_flat])
+    else:
+        p0_flat = np.concatenate([np.array(p0) for p0 in p0_list])
+    
+    print(f"\nTotal parameters to fit: {total_params} (9 per peak × {n_peaks} peaks)")
+    
+    # Define objective function
+    iteration_count = [0]
+    
+    # Pre-interpolate background to fit range if provided
+    if background_intensity is not None:
+        # background_intensity is on full experimental grid (x_exp)
+        # We need to interpolate it to the fit range (x_fit)
+        bg_interp = np.interp(x_fit, x_exp, background_intensity)
+    else:
+        bg_interp = None
+    
+    def multi_peak_objective(params_flat):
+        iteration_count[0] += 1
+        """
+        Objective function for multi-peak fitting.
+        Simulates all peaks, sums them, and compares to experiment.
+        """
+        
+        # Split flat parameters into per-peak arrays
+        params_per_peak = [params_flat[i*9:(i+1)*9] for i in range(n_peaks)]
+        
+        # Initialize total simulated intensity
+        int_sim_total = np.zeros_like(x_fit)
+        
+        # Add background if provided (already interpolated to fit range)
+        if bg_interp is not None:
+            int_sim_total += bg_interp
+        
+        # Simulate and sum each peak
+        for i, (label, params) in enumerate(zip(peak_labels, params_per_peak)):
+            c_start, c_end, t_nm, s_var, r_nm, mos, rel_len, att_len, instr = params
+            
+            # Derived parameters
+            nz_fit_layer = int((t_nm * 10) / c_end)
+            r_layers = (r_nm * 10) / c_end
+            
+            # Generate system for this peak
+            lat_arr, h_map, t_arr = create_crystal_system(
+                nx_fits[i], ny_fits[i], nz_fit_layer,
+                c_end,
+                [c_start, c_end],
+                mode='full',
+                gradient_type='exponential',
+                spatial_var_percent=s_var,
+                roughness_layers=r_layers,
+                mosaicity_fwhm=mos,
+                relaxation_length=rel_len
+            )
+            
+            # Calculate XRD for this peak
+            tt_sim, int_sim = calculate_xrd_vectorized(
+                lat_arr, h_map, t_arr,
+                two_theta_range=fit_ranges[i],
+                wavelength=wavelength,
+                attenuation_length_nm=att_len,
+                instrumental_broadening=instr,
+                n_points=800,
+                normalize=True
+            )
+            
+            # Scale this peak's intensity
+            int_sim = int_sim * film_scales[i]
+            
+            # Interpolate to experimental grid and add to total
+            int_sim_interp = np.interp(x_fit, tt_sim, int_sim)
+            int_sim_total += int_sim_interp
+        
+        # Calculate residual
+        if use_log_residual:
+            epsilon = 1e-6
+            residual = np.sum((np.log10(y_fit + epsilon) - np.log10(int_sim_total + epsilon))**2)
+        else:
+            residual = np.sum((y_fit - int_sim_total)**2)
+        
+        if iteration_count[0] % 50 == 0:
+            print(f"  Iteration {iteration_count[0]}: Residual = {residual:.6f}")
+        
+        return residual
+    
+    # Run optimization
+    print("\n=== Starting Optimization ===")
+    
+    if use_global_search:
+        print(f"Stage 1: Differential Evolution (exploring parameter space)")
+        print(f"  maxiter={de_maxiter}, popsize={de_popsize}")
+        
+        res_global = differential_evolution(
+            multi_peak_objective,
+            bounds=bounds_flat,
+            strategy='best1bin',
+            maxiter=de_maxiter,
+            popsize=de_popsize,
+            tol=0.01,
+            mutation=(0.5, 1.0),
+            recombination=0.7,
+            seed=None,
+            init='latinhypercube',
+            atol=0,
+            updating='immediate',
+            workers=1
+        )
+        
+        print(f"  DE Complete: Residual = {res_global.fun:.6f}, Evals = {res_global.nfev}")
+        p0_refined = res_global.x
+    else:
+        p0_refined = p0_flat
+    
+    # Stage 2: Local refinement with Powell
+    print(f"\nStage 2: Powell Local Refinement (polishing solution)")
+    print(f"  tol={tol}, maxiter={maxiter if maxiter else 'unlimited'}")
+    
+    iteration_count[0] = 0  # Reset counter
+    
+    options = {}
+    if maxiter is not None:
+        options['maxiter'] = maxiter
+    
+    res = minimize(
+        multi_peak_objective,
+        p0_refined,
+        bounds=bounds_flat,
+        method='Powell',
+        tol=tol,
+        options=options
+    )
+    
+    print("\n=== Optimization Complete ===")
+    print(f"Success: {res.success}")
+    print(f"Message: {res.message}")
+    print(f"Final Residual: {res.fun:.6f}")
+    
+    if use_global_search:
+        print(f"Total evaluations: {res_global.nfev + res.nfev}")
+    
+    # Unpack results
+    params_optimized = [res.x[i*9:(i+1)*9] for i in range(n_peaks)]
+    
+    results = {
+        'optimization_result': res,
+        'params_per_peak': params_optimized,
+        'peak_labels': peak_labels,
+        'bounds_list': bounds_list,
+        'film_scales': film_scales,
+        'use_global_search': use_global_search
+    }
+    
+    if use_global_search:
+        results['global_result'] = res_global
+    
+    return results
