@@ -1,5 +1,6 @@
 #import all the libraries needed
 from import_dep import *
+from plot_style import set_plot_style
 
 def _plot_on_ax(
     ax: plt.Axes,
@@ -16,8 +17,11 @@ def _plot_on_ax(
     y_lim: Optional[Tuple[float, float]] = None,
     contour_color: bool = False,
     show_colorbar: bool = True,
+    show_key: bool = True,
     first_index: bool = False,  # New parameter to prevent double plotting of labels
     resolution_scaling: Optional[float] = None, # New parameter to scale the resolution of the meshgrid
+    intensity_lim: Optional[list[float]] = None, # New parameter to set intensity limits
+    show_title: bool = False, # New parameter to show/hide plot title
 ) -> None:
     """
     A helper function to plot a single dataset on the provided axis.
@@ -35,6 +39,7 @@ def _plot_on_ax(
         label_str    : Label for the plot legend.
         x_lim        : Optional x-axis limits.
         y_lim        : Optional y-axis limits.
+        intensity_lim: Optional intensity limits [min, max].
     """
     # Extract data based on axis unit
     if ax_unit == 'reciprocal':
@@ -47,9 +52,10 @@ def _plot_on_ax(
         grid_y = class_obj.qxqz_np[count_d][:,:,1]
         grid_intensity = class_obj.qxqz_np[count_d][:,:,2]
         
-        ax.set_xlabel(r"$Q_{\parallel} \,(2\pi/\mathrm{\AA})$", fontsize=16)
-        ax.set_ylabel(r"$Q_{\perp} \,(2\pi/\mathrm{\AA})$", fontsize=16)
-        ax.set_title(r"Reciprocal Space Map ($Q_x$ vs $Q_z$)", fontsize=14)
+        ax.set_xlabel(r"$Q_{\parallel} \,(2\pi/\mathrm{\AA})$")
+        ax.set_ylabel(r"$Q_{\perp} \,(2\pi/\mathrm{\AA})$")
+        if show_title:
+            ax.set_title(r"Reciprocal Space Map ($Q_x$ vs $Q_z$)")
     elif ax_unit == 'lattice':
         # df format
         x = class_obj.lat_param_df[count_d]['a']
@@ -60,9 +66,10 @@ def _plot_on_ax(
         grid_y = class_obj.lat_param_np[count_d][:,:,1]
         grid_intensity = class_obj.lat_param_np[count_d][:,:,2]
         
-        ax.set_xlabel(r"$a \,(\mathrm{\AA})$", fontsize=16)
-        ax.set_ylabel(r"$c \,(\mathrm{\AA})$", fontsize=16)
-        ax.set_title(r"Lattice Parameters ($a$ vs $c$)", fontsize=14)
+        ax.set_xlabel(r"$a \,(\mathrm{\AA})$")
+        ax.set_ylabel(r"$c \,(\mathrm{\AA})$")
+        if show_title:
+            ax.set_title(r"Lattice Parameters ($a$ vs $c$)")
     else:
         raise ValueError("Unknown ax_unit: choose 'reciprocal' or 'lattice'")
     
@@ -115,17 +122,24 @@ def _plot_on_ax(
     # Invert the normalized intensity to get higher transparency for smaller values
     alpha_values = norm_log_intensity
     
-    
+    vmin = None
+    vmax = None
+    if intensity_lim is not None:
+        vmin = 10**intensity_lim[0]
+        vmax = 10**intensity_lim[1]
 
     # Generate plot based on plot_type
     if plot_type == 'scatter':
-        p_out = ax.scatter(x_filt, y_filt, c=plot_intensity, cmap=colormap, s=2.5, edgecolors='none', label=label_str, norm=LogNorm(),alpha=alpha_values)
+        p_out = ax.scatter(x_filt, y_filt, c=plot_intensity, cmap=colormap, s=2.5, edgecolors='none', label=label_str, norm=LogNorm(vmin=vmin, vmax=vmax),alpha=alpha_values)
     
     elif plot_type == 'contour':
         
-        p_out = ax.scatter(x_filt, y_filt, c=plot_intensity, cmap=colormap, s=2.5, edgecolors='none',  norm=LogNorm(),alpha=alpha_values)
+        p_out = ax.scatter(x_filt, y_filt, c=plot_intensity, cmap=colormap, s=2.5, edgecolors='none',  norm=LogNorm(vmin=vmin, vmax=vmax),alpha=alpha_values)
         
-        contour_levels = np.logspace(np.log10(1 + 1e-99), np.log10(plot_intensity.max()), 10)
+        if intensity_lim is not None:
+             contour_levels = np.logspace(intensity_lim[0], intensity_lim[1], 10)
+        else:
+             contour_levels = np.logspace(np.log10(1 + 1e-99), np.log10(plot_intensity.max()), 10)
         
         # generate contours from the meshgrid data to prevent errors/streaking
         ax.contour(grid_x, grid_y, grid_intensity, levels=contour_levels, colors=c_color, linewidths=0.3)
@@ -135,26 +149,29 @@ def _plot_on_ax(
     elif plot_type == 'mesh':
 
         
-        p_out = ax.pcolormesh(grid_x, grid_y, grid_intensity, cmap=colormap, shading='auto', norm=LogNorm())
+        p_out = ax.pcolormesh(grid_x, grid_y, grid_intensity, cmap=colormap, shading='auto', norm=LogNorm(vmin=vmin, vmax=vmax))
         scatter_for_legend = ax.scatter([], [], c=c_color, label=label_str)
         
         # Apply Gaussian filter to the interpolated data for contour plot
         #smoothed_intensity = gaussian_filter(grid_intensity, sigma=0.00001)
         
-        contour_levels = np.logspace(np.log10(1 + 1e-99), np.log10(plot_intensity.max()), 10) 
+        if intensity_lim is not None:
+             contour_levels = np.logspace(intensity_lim[0], intensity_lim[1], 10)
+        else:
+             contour_levels = np.logspace(np.log10(1 + 1e-99), np.log10(plot_intensity.max()), 10) 
         ax.contour(grid_x, grid_y, grid_intensity, levels=contour_levels, colors=c_color, linewidths=0.2)
         
     elif plot_type == 'surf':
         # Set up the 3D plot
         
-        p_out = ax.plot_surface(grid_x, grid_y, grid_intensity, cmap=colormap, linewidth=0, antialiased=False)
+        p_out = ax.plot_surface(grid_x, grid_y, grid_intensity, cmap=colormap, linewidth=0, antialiased=False, norm=LogNorm(vmin=vmin, vmax=vmax))
         
         
     elif plot_type == 'triangle':
         
-        ax.plot_trisurf(x_filt, y_filt, plot_intensity, cmap=colormap, shading='auto', norm=LogNorm())
+        ax.plot_trisurf(x_filt, y_filt, plot_intensity, cmap=colormap, shading='auto', norm=LogNorm(vmin=vmin, vmax=vmax))
         # Add a color bar
-        p_out = ax.scatter(x_filt, y_filt, c=plot_intensity, cmap=colormap)
+        p_out = ax.scatter(x_filt, y_filt, c=plot_intensity, cmap=colormap, norm=LogNorm(vmin=vmin, vmax=vmax))
         
     
     else:
@@ -163,8 +180,7 @@ def _plot_on_ax(
     # Generate a colorbar for the plot
     if show_colorbar: 
             cbar = plt.colorbar(p_out, ax=ax, pad=0.02, format=LogFormatterSciNotation())  
-            cbar.set_label("Intensity", fontsize=12)
-            cbar.ax.tick_params(labelsize=10)
+            cbar.set_label("Intensity")
             
     # Add guidelines for lattice plots
     if ax_unit == 'lattice' and first_index == True:
@@ -178,7 +194,7 @@ def _plot_on_ax(
     if ax_unit == 'reciprocal' and first_index == True:
         #ax.scatter(1.526, 4.571, color='red', marker='+', s=100, label='BaSnO3 on STO')
         #ax.scatter(1.581, 4.555, color='green', marker='+', s=100, label='SrSnO3 on STO')
-        ax.scatter(2*np.pi/4.05, 6*np.pi/4.05, color='yellow', marker='+', s=100, label='LaScO3 bulk')
+        #ax.scatter(2*np.pi/4.05, 6*np.pi/4.05, color='yellow', marker='+', s=100, label='LaScO3 bulk')
         ax.scatter(2*np.pi/4.12, 6*np.pi/4.12, color='purple', marker='+', s=100, label='BaSnO3 bulk')
         ax.scatter(2*np.pi/4.036, 6*np.pi/4.036, color='orange', marker='+', s=100, label='SrSnO3 bulk')
         #ax.axvline(x=1.61, color='green', linestyle='--', linewidth=1)
@@ -190,13 +206,10 @@ def _plot_on_ax(
     if y_lim is not None:
         ax.set_ylim(y_lim)
 
-    # Tweak tick parameters
-    ax.tick_params(axis='both', which='major', labelsize=14, length=4, width=0.6)
-    ax.tick_params(axis='both', which='minor', labelsize=14, length=2, width=0.4)
-
     # Add a legend if a label is provided
     #if label_str is not None:
-    ax.legend(loc='lower right', framealpha=0.4)
+    if show_key == True:
+        ax.legend(loc='upper left', framealpha=0.4)
 
 
 def create_custom_colormap(base_cmap='jet'):
@@ -232,8 +245,12 @@ def RSM_plot_sep(
     y_lim: Optional[Tuple[float, float]] = None,
     plot_type: str = 'scatter',
     ax_unit: str = 'reciprocal',
+    show_key: bool = True,
     resolution_scaling: Optional[float] = None, # New parameter to scale the resolution of the meshgrid
     string_suppress: bool = False,  # New parameter to suppress string labels
+    intensity_lim: Optional[List[float]] = None, # New parameter to set intensity limits
+    title_on: bool = False, # New parameter to show/hide plot title
+    color_bar: bool = True, # New parameter to show/hide colorbar
 ) -> Figure:
     """
     Plot multiple datasets in separate subplots.
@@ -249,6 +266,7 @@ def RSM_plot_sep(
         plot_type: Type of plot to generate; one of 'scatter', 'contour', or 'mesh'.
         ax_unit: Unit type for the axes; either 'reciprocal' or 'lattice'.
         resolution_scaling: Optional parameter to scale the resolution of the meshgrid.
+        intensity_lim: Optional intensity limits [min, max].
 
     Returns:
         The matplotlib Figure object containing the subplots.
@@ -275,12 +293,84 @@ def RSM_plot_sep(
             _plot_on_ax(ax, d, class_obj, count_d, threshold_filt = threshold_filt,
                         grid_filt = grid_filt,
                         plot_type = plot_type, ax_unit = ax_unit, colormap= custom_cmap , label_str=label_str,
-                        x_lim=x_lim, y_lim=y_lim, resolution_scaling=resolution_scaling, first_index=first_index)
+                        x_lim=x_lim, y_lim=y_lim, resolution_scaling=resolution_scaling, first_index=first_index,
+                        show_key=show_key, intensity_lim=intensity_lim, show_title=title_on, show_colorbar=color_bar)
             subplot_counter += 1
             first_index = False
             
     fig.tight_layout()
     fig.subplots_adjust(left=0.18, right=0.98, bottom=0.18, top=0.98)
+    plt.show()
+    return fig
+
+
+def RSM_plot_single(
+    dat: Any,
+    threshold_filt: float = 0,
+    grid_filt: float = 100,
+    x_lim: Optional[Tuple[float, float]] = None,
+    y_lim: Optional[Tuple[float, float]] = None,
+    plot_type: str = 'scatter',
+    ax_unit: str = 'reciprocal',
+    show_key: bool = True,
+    resolution_scaling: Optional[float] = None,
+    string_suppress: bool = False,
+    intensity_lim: Optional[List[float]] = None,
+    title_on: bool = False,
+    color_bar: bool = True,
+    export_data: bool = False,
+) -> Figure:
+    """
+    Plot a single RSM dataset with consistent figure styling.
+
+    Parameters:
+        dat: A single data object containing RSM data. Expected to have
+             a 'qxqz_df' attribute (a sequence of dictionaries with data) and may have
+             a 'plot_string' attribute and 'lat_param_df' for lattice parameters.
+        threshold_filt: Intensity threshold used to filter data.
+        grid_filt: Filter the grid data based on threshold.
+        x_lim: Optional tuple specifying the x-axis limits (min, max).
+        y_lim: Optional tuple specifying the y-axis limits (min, max).
+        plot_type: Type of plot to generate; one of 'scatter', 'contour', or 'mesh'.
+        ax_unit: Unit type for the axes; either 'reciprocal' or 'lattice'.
+        resolution_scaling: Optional parameter to scale the resolution of the meshgrid.
+        intensity_lim: Optional intensity limits [min, max].
+        title_on: Whether to show the plot title (default: False).
+        color_bar: Whether to show the colorbar (default: True).
+        export_data: If True, use publication-ready figure size [2.625, 3.5].
+                     If False, use visualisation size [6, 9].
+
+    Returns:
+        The matplotlib Figure object containing the plot.
+    """
+    # Get figure size from plot_style and invert x/y for RSM plots
+    fig_size = set_plot_style(export_data=export_data)
+    fig_size_inverted = [fig_size[1], fig_size[0]]  # Invert x and y
+    
+    fig, ax = plt.subplots(figsize=fig_size_inverted)
+    
+    # Handle both single object and list input
+    if isinstance(dat, list):
+        class_obj = dat[0]  # Take first element if list is passed
+    else:
+        class_obj = dat
+    
+    count_d = 0
+    d = class_obj.qxqz_df[count_d]
+    
+    # Only add the label string if string_suppress is False
+    if string_suppress:
+        label_str = None
+    else:
+        label_str = (class_obj.plot_string[count_d] if hasattr(class_obj, 'plot_string') else None)
+    
+    _plot_on_ax(ax, d, class_obj, count_d, threshold_filt=threshold_filt,
+                grid_filt=grid_filt,
+                plot_type=plot_type, ax_unit=ax_unit, colormap=custom_cmap, label_str=label_str,
+                x_lim=x_lim, y_lim=y_lim, resolution_scaling=resolution_scaling, first_index=True,
+                show_key=show_key, intensity_lim=intensity_lim, show_title=title_on, show_colorbar=color_bar)
+    
+    fig.tight_layout()
     plt.show()
     return fig
 
@@ -293,7 +383,10 @@ def RSM_plot_same(
     y_lim: Optional[Tuple[float, float]] = None,
     plot_type: str = 'scatter',
     ax_unit: str = 'reciprocal',
+    show_key: bool = True,
     resolution_scaling: Optional[float] = None, # New parameter to scale the resolution of the meshgrid
+    title_on: bool = False, # New parameter to show/hide plot title
+    color_bar: bool = True, # New parameter to show/hide colorbar
 ) -> Figure:
     """
     Plot multiple datasets on a single set of axes.
@@ -325,7 +418,8 @@ def RSM_plot_same(
             _plot_on_ax(ax, d, class_obj, count_d, threshold_filt = threshold_filt,
                         grid_filt = grid_filt,
                         plot_type = plot_type, ax_unit = ax_unit, colormap=cmap, label_str=label_str,
-                        x_lim=x_lim, y_lim=y_lim, contour_color=True, show_colorbar=False, first_index=first_index, resolution_scaling=resolution_scaling)
+                        x_lim=x_lim, y_lim=y_lim, contour_color=True, show_colorbar=color_bar, first_index=first_index, resolution_scaling=resolution_scaling,
+                        show_key=show_key, show_title=title_on)
             col_counter += 1
             first_index = False
     fig.tight_layout()
