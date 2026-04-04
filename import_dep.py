@@ -23,13 +23,16 @@ from scipy.ndimage import gaussian_filter
 from matplotlib.colors import LogNorm, ListedColormap
 from matplotlib.ticker import LogFormatter
 from matplotlib.ticker import LogFormatterSciNotation
-from typing import Optional, Tuple, Any, Dict, List
+from typing import Optional, Tuple, Any, Dict, List, Union
 
 
 import scipy
-from scipy.optimize import fsolve
+from scipy.optimize import fsolve, least_squares
 from scipy.stats import linregress
+from scipy.ndimage import maximum_filter, label
+from scipy.signal import find_peaks
 import matplotlib.patches as mpatches
+import openpyxl
 
 import scienceplots
 import readline

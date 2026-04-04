@@ -163,6 +163,7 @@ def ttw_plot_same(
     log_plot: bool = True,
     med_filt: int = 0,
     offset: Optional[float] = None,
+    y_label: bool = False,
 ) -> Figure:
     """
     Plot multiple datasets on a single set of axes, with an option to normalize to their own maximum intensity.
@@ -224,10 +225,11 @@ def ttw_plot_same(
     if offset is not None:
         # With offset, absolute values are meaningless
         # Add "Log" prefix for log scale since tick marks are removed (not visually obvious)
-        if log_plot:
-            ax.set_ylabel(r"Log Intensity (a.u., offset)")
-        else:
-            ax.set_ylabel(r"Intensity (a.u., offset)")
+        if y_label == True:
+            if log_plot:
+                ax.set_ylabel(r"Log Intensity (a.u., offset)")
+            else:
+                ax.set_ylabel(r"Intensity (a.u., offset)")
         ax.set_yticks([])  # Remove y-axis ticks
         ax.yaxis.set_ticklabels([])  # Remove y-axis numbers
     

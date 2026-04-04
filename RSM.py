@@ -1,6 +1,7 @@
 #import all the libraries needed
 from import_dep import *
 from RSM_functions import *
+import re as _re
 
 class RSM:
     '''Class to store, process and plot XRD RSM data
@@ -17,6 +18,7 @@ class RSM:
         self.RSM_np: list = []
         self.file_name: list = []
         self.plot_string: list = []
+        self.sample_code: str = None  # e.g. 'HC006', 'EM025', 'JT071'
         
         # list to store the processed qx and qz vs intensity values
         self.qxqz_df: list = [] 
@@ -31,6 +33,13 @@ class RSM:
         
         self.points_per_scan: int = None
           
+        # Extract sample code from folder_name (2-3 letters + 2-4 digits)
+        match = _re.match(r'^([A-Za-z]{2,3}\d{2,4})', str(folder_name))
+        if match:
+            self.sample_code = match.group(1).upper()
+        else:
+            self.sample_code = str(folder_name).upper()
+        
         # Load the data as you initialize the class
         self._load_data()
         self._extract_data()
