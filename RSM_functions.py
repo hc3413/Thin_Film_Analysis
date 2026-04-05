@@ -4,6 +4,7 @@ from plot_style import set_plot_style
 import matplotlib.patheffects as pe
 from matplotlib.lines import Line2D
 
+
 def _plot_on_ax(
     ax: plt.Axes,
     d: pd.DataFrame,
@@ -15,19 +16,22 @@ def _plot_on_ax(
     ax_unit: str = 'reciprocal',
     colormap: str = 'plasma',
     label_str: Optional[str] = None,
-    x_lim: Optional[Tuple[float, float]] = None,
-    y_lim: Optional[Tuple[float, float]] = None,
+    x_lim: Optional[Union[Tuple[float, float], str]] = None,
+    y_lim: Optional[Union[Tuple[float, float], str]] = None,
     contour_color: bool = False,
     show_colorbar: bool = True,
     show_key: bool = True,
-    first_index: bool = False,  # New parameter to prevent double plotting of labels
-    resolution_scaling: Optional[float] = None, # New parameter to scale the resolution of the meshgrid
-    intensity_lim: Optional[list[float]] = None, # New parameter to set intensity limits
+    first_index: bool = False,
+    resolution_scaling: Optional[float] = None,
+    intensity_lim: Optional[Union[list, str]] = None, # can be [min, max] or 'auto' to set based on film peaks excluding STO
     show_title: bool = False, # New parameter to show/hide plot title
     fitted_peaks: Optional[pd.DataFrame] = None, # Overlay fitted peak markers
-) -> None:
+    denoise_size: Optional[int] = None, # Remove connected components smaller than this many pixels
+) -> Tuple[Optional[list], Optional[list]]:
     """
     A helper function to plot a single dataset on the provided axis.
+
+    Returns (resolved_x_lim, resolved_y_lim) so callers can reuse auto limits.
 
     Parameters:
         ax           : The matplotlib Axes instance to draw on.
@@ -47,13 +51,13 @@ def _plot_on_ax(
     # Extract data based on axis unit
     if ax_unit == 'reciprocal':
         # df format
-        x = class_obj.qxqz_df[count_d]['qx']
-        y = class_obj.qxqz_df[count_d]['qz']
-        z = class_obj.qxqz_df[count_d]['Intensity']
-        # Numpy format where it is reshaped into meshgrid
-        grid_x = class_obj.qxqz_np[count_d][:,:,0]
-        grid_y = class_obj.qxqz_np[count_d][:,:,1]
-        grid_intensity = class_obj.qxqz_np[count_d][:,:,2]
+        x = class_obj.qxqz_df[count_d]['qx'].values.copy()
+        y = class_obj.qxqz_df[count_d]['qz'].values.copy()
+        z = class_obj.qxqz_df[count_d]['Intensity'].values.copy()
+        # Numpy format where it is reshaped into meshgrid (copy to avoid mutating source)
+        grid_x = class_obj.qxqz_np[count_d][:,:,0].copy()
+        grid_y = class_obj.qxqz_np[count_d][:,:,1].copy()
+        grid_intensity = class_obj.qxqz_np[count_d][:,:,2].copy()
         
         ax.set_xlabel(r"$Q_{\parallel} \,(2\pi/\mathrm{\AA})$")
         ax.set_ylabel(r"$Q_{\perp} \,(2\pi/\mathrm{\AA})$")
@@ -61,13 +65,13 @@ def _plot_on_ax(
             ax.set_title(r"Reciprocal Space Map ($Q_x$ vs $Q_z$)")
     elif ax_unit == 'lattice':
         # df format
-        x = class_obj.lat_param_df[count_d]['a']
-        y = class_obj.lat_param_df[count_d]['c']
-        z = class_obj.lat_param_df[count_d]['Intensity']
-        # Numpy format where it is reshaped into meshgrid
-        grid_x = class_obj.lat_param_np[count_d][:,:,0]
-        grid_y = class_obj.lat_param_np[count_d][:,:,1]
-        grid_intensity = class_obj.lat_param_np[count_d][:,:,2]
+        x = class_obj.lat_param_df[count_d]['a'].values.copy()
+        y = class_obj.lat_param_df[count_d]['c'].values.copy()
+        z = class_obj.lat_param_df[count_d]['Intensity'].values.copy()
+        # Numpy format where it is reshaped into meshgrid (copy to avoid mutating source)
+        grid_x = class_obj.lat_param_np[count_d][:,:,0].copy()
+        grid_y = class_obj.lat_param_np[count_d][:,:,1].copy()
+        grid_intensity = class_obj.lat_param_np[count_d][:,:,2].copy()
         
         ax.set_xlabel(r"$a \,(\mathrm{\AA})$")
         ax.set_ylabel(r"$c \,(\mathrm{\AA})$")
@@ -77,8 +81,26 @@ def _plot_on_ax(
         raise ValueError("Unknown ax_unit: choose 'reciprocal' or 'lattice'")
     
     
-     # Interpolate data if resolution_scaling is specified
-    if resolution_scaling is not None:
+     # --- Threshold & denoise on the RAW grid (before any interpolation) ---
+    # This ensures behaviour is independent of resolution_scaling.
+    # Build a binary keep-mask on the original grid, then apply it everywhere.
+    raw_keep = grid_intensity > threshold_filt
+    if denoise_size is not None and denoise_size > 0:
+        labelled, n_features = label(raw_keep)
+        for i in range(1, n_features + 1):
+            if (labelled == i).sum() < denoise_size:
+                raw_keep[labelled == i] = False
+    # Zero out rejected pixels on the raw grid so interpolation doesn't spread noise
+    grid_intensity[~raw_keep] = 0.0
+    # Sync flat arrays with the denoised grid (so auto-scaling sees the cleanup)
+    x = grid_x.flatten()
+    y = grid_y.flatten()
+    z = grid_intensity.flatten()
+
+    # Interpolate data if resolution_scaling requests up/down-sampling.
+    # resolution_scaling=None or 1 → use original grid as-is.
+    # >1 → upsample (smoother visuals), <1 → downsample (faster rendering).
+    if resolution_scaling is not None and resolution_scaling != 1:
         # Scale and interpolate the meshgrid data
         nx = int(grid_x.shape[1] * resolution_scaling)
         ny = int(grid_y.shape[0] * resolution_scaling)
@@ -92,16 +114,57 @@ def _plot_on_ax(
         x = xi.flatten()
         y = yi.flatten()
         z = grid_intensity.flatten()
-        
-    
 
-    # Filter data based on threshold
+    # Filter to above-threshold points (already denoised via raw_keep above)
     filt_indices = z > threshold_filt
     x_filt = x[filt_indices]
     y_filt = y[filt_indices]
     plot_intensity = z[filt_indices]
 
-        
+    # Resolve intensity_lim='auto': exclude STO region, find min/max of film peaks
+    _sto_overflow = False  # track whether we need extended colormap for STO
+    if isinstance(intensity_lim, str) and intensity_lim.lower() == 'auto':
+        if ax_unit == 'reciprocal':
+            sto_cx, sto_cz = STO_QX_REF, STO_QZ_REF
+        else:
+            sto_cx, sto_cz = 3.905, 3.905  # a=c for cubic STO
+        dist_to_sto = np.sqrt((x_filt - sto_cx)**2 + (y_filt - sto_cz)**2)
+        film_mask = dist_to_sto > 0.05
+        if film_mask.any():
+            film_int = plot_intensity[film_mask]
+            film_log_max = np.log10(film_int.max())
+            true_max = plot_intensity.max()
+            intensity_lim = [np.log10(film_int.min()), film_log_max]
+            # If STO exceeds film max, activate overflow colouring
+            if true_max > 10**film_log_max * 1.1:
+                _sto_overflow = True
+                _true_log_max = np.log10(true_max)
+        else:
+            intensity_lim = None  # fallback
+
+    # Resolve x_lim='auto' and/or y_lim='auto':
+    # Find data bounds after threshold filtering, add 5% padding, then expand
+    # the smaller range so that Qx and Qz have equal physical scaling.
+    x_auto = isinstance(x_lim, str) and x_lim.lower() == 'auto'
+    y_auto = isinstance(y_lim, str) and y_lim.lower() == 'auto'
+    if (x_auto or y_auto) and len(x_filt) > 0:
+        pad_frac = 0.05
+        if x_auto:
+            dx = max(x_filt.max() - x_filt.min(), 1e-6)
+            x_lim = [float(x_filt.min() - pad_frac * dx),
+                      float(x_filt.max() + pad_frac * dx)]
+        if y_auto:
+            dy = max(y_filt.max() - y_filt.min(), 1e-6)
+            y_lim = [float(y_filt.min() - pad_frac * dy),
+                      float(y_filt.max() + pad_frac * dy)]
+        # Ensure equal scaling: deferred until after colorbar is added (below)
+        # so that we use the true axes dimensions.
+    # Fallback: if auto was requested but no data survived the threshold
+    if x_auto and not isinstance(x_lim, list):
+        x_lim = None
+    if y_auto and not isinstance(y_lim, list):
+        y_lim = None
+
     # Color contour lines based on colormap or default to black
     c_map = cm.get_cmap(colormap)
     middle_color = c_map(0.5)  # This returns an RGBA tuple 
@@ -110,8 +173,11 @@ def _plot_on_ax(
     else:
         c_color = 'black'
 
-    # Filtering for the contours only
-    grid_intensity[grid_intensity < grid_filt] = 0
+    # Mask below-threshold cells so pcolormesh renders them as transparent;
+    # keep an unmasked copy for contour (contour's internal locator chokes on masked arrays).
+    grid_intensity_contour = grid_intensity.copy()
+    grid_intensity_contour[grid_intensity_contour < grid_filt] = 0
+    grid_intensity = np.ma.masked_where(grid_intensity < grid_filt, grid_intensity)
     
     # Apply logarithmic scaling to plot_intensity for alpha mapping
     log_plot_intensity = np.log10(plot_intensity + 1e-99)
@@ -127,17 +193,42 @@ def _plot_on_ax(
     
     vmin = None
     vmax = None
+    plot_cmap = colormap  # default: use the colormap as-is
     if intensity_lim is not None:
         vmin = 10**intensity_lim[0]
-        vmax = 10**intensity_lim[1]
+        if _sto_overflow:
+            # Build a custom colormap: full jet covers [0, frac] and
+            # red→black covers [frac, 1], where frac is the fractional
+            # position of the film-peak maximum within the full log range.
+            # Standard LogNorm(vmin, true_max) handles everything else —
+            # no custom normalizer needed.
+            vmax = 10**_true_log_max
+            frac = (intensity_lim[1] - intensity_lim[0]) / (_true_log_max - intensity_lim[0])
+            frac = np.clip(frac, 0.3, 0.98)
+            base = cm.get_cmap(colormap, 256)
+            n_base = int(256 * frac)
+            n_ext = 256 - n_base
+            base_colors = base(np.linspace(0, 1, n_base))
+            peak_color = base_colors[-1].copy()
+            black = np.array([0.0, 0.0, 0.0, 1.0])
+            ext_colors = np.array([peak_color * (1 - t) + black * t
+                                   for t in np.linspace(0, 1, n_ext)])
+            ext_colors[:, 3] = 1.0
+            all_colors = np.vstack([base_colors, ext_colors])
+            plot_cmap = ListedColormap(all_colors)
+        else:
+            vmax = 10**intensity_lim[1]
+
+    # Standard LogNorm for all cases
+    plot_norm = LogNorm(vmin=vmin, vmax=vmax)
 
     # Generate plot based on plot_type
     if plot_type == 'scatter':
-        p_out = ax.scatter(x_filt, y_filt, c=plot_intensity, cmap=colormap, s=2.5, edgecolors='none', label=label_str, norm=LogNorm(vmin=vmin, vmax=vmax),alpha=alpha_values)
+        p_out = ax.scatter(x_filt, y_filt, c=plot_intensity, cmap=plot_cmap, s=2.5, edgecolors='none', label=label_str, norm=plot_norm, alpha=alpha_values)
     
     elif plot_type == 'contour':
         
-        p_out = ax.scatter(x_filt, y_filt, c=plot_intensity, cmap=colormap, s=2.5, edgecolors='none',  norm=LogNorm(vmin=vmin, vmax=vmax),alpha=alpha_values)
+        p_out = ax.scatter(x_filt, y_filt, c=plot_intensity, cmap=plot_cmap, s=2.5, edgecolors='none', norm=plot_norm, alpha=alpha_values)
         
         if intensity_lim is not None:
              contour_levels = np.logspace(intensity_lim[0], intensity_lim[1], 10)
@@ -145,14 +236,14 @@ def _plot_on_ax(
              contour_levels = np.logspace(np.log10(1 + 1e-99), np.log10(plot_intensity.max()), 10)
         
         # generate contours from the meshgrid data to prevent errors/streaking
-        ax.contour(grid_x, grid_y, grid_intensity, levels=contour_levels, colors=c_color, linewidths=0.3)
+        ax.contour(grid_x, grid_y, grid_intensity_contour, levels=contour_levels, colors=c_color, linewidths=0.3)
         
         scatter_for_legend = ax.scatter([], [], c=c_color, label=label_str)
         
     elif plot_type == 'mesh':
 
         
-        p_out = ax.pcolormesh(grid_x, grid_y, grid_intensity, cmap=colormap, shading='auto', norm=LogNorm(vmin=vmin, vmax=vmax))
+        p_out = ax.pcolormesh(grid_x, grid_y, grid_intensity, cmap=plot_cmap, shading='auto', norm=plot_norm)
         scatter_for_legend = ax.scatter([], [], c=c_color, label=label_str)
         
         # Apply Gaussian filter to the interpolated data for contour plot
@@ -162,27 +253,27 @@ def _plot_on_ax(
              contour_levels = np.logspace(intensity_lim[0], intensity_lim[1], 10)
         else:
              contour_levels = np.logspace(np.log10(1 + 1e-99), np.log10(plot_intensity.max()), 10) 
-        ax.contour(grid_x, grid_y, grid_intensity, levels=contour_levels, colors=c_color, linewidths=0.2)
+        ax.contour(grid_x, grid_y, grid_intensity_contour, levels=contour_levels, colors=c_color, linewidths=0.2)
         
     elif plot_type == 'surf':
         # Set up the 3D plot
         
-        p_out = ax.plot_surface(grid_x, grid_y, grid_intensity, cmap=colormap, linewidth=0, antialiased=False, norm=LogNorm(vmin=vmin, vmax=vmax))
+        p_out = ax.plot_surface(grid_x, grid_y, grid_intensity, cmap=plot_cmap, linewidth=0, antialiased=False, norm=plot_norm)
         
         
     elif plot_type == 'triangle':
         
-        ax.plot_trisurf(x_filt, y_filt, plot_intensity, cmap=colormap, shading='auto', norm=LogNorm(vmin=vmin, vmax=vmax))
+        ax.plot_trisurf(x_filt, y_filt, plot_intensity, cmap=plot_cmap, shading='auto', norm=plot_norm)
         # Add a color bar
-        p_out = ax.scatter(x_filt, y_filt, c=plot_intensity, cmap=colormap, norm=LogNorm(vmin=vmin, vmax=vmax))
+        p_out = ax.scatter(x_filt, y_filt, c=plot_intensity, cmap=plot_cmap, norm=plot_norm)
         
     
     else:
         raise ValueError("Unknown plot_type: choose 'scatter', 'contour', or 'mesh'")        
 
     # Generate a colorbar for the plot
-    if show_colorbar: 
-            cbar = plt.colorbar(p_out, ax=ax, pad=0.02, format=LogFormatterSciNotation())  
+    if show_colorbar:
+            cbar = plt.colorbar(p_out, ax=ax, pad=0.02, format=LogFormatterSciNotation())
             cbar.set_label("Intensity")
             
     # Add guidelines for lattice plots
@@ -202,6 +293,28 @@ def _plot_on_ax(
         ax.scatter(2*np.pi/4.036, 6*np.pi/4.036, color='orange', marker='+', s=100, label='SrSnO3 bulk')
         #ax.axvline(x=1.61, color='green', linestyle='--', linewidth=1)
         #ax.axhline(y=1.61*3, color='green', linestyle='--', linewidth=1)
+
+    # Equal-scaling: now that the colorbar (if any) has been added, the axes
+    # bounding box reflects the true plot area.  Expand the smaller axis so
+    # that 1 unit in Qx == 1 unit in Qz on screen.
+    if (x_auto or y_auto) and isinstance(x_lim, list) and isinstance(y_lim, list):
+        fig = ax.get_figure()
+        fig.canvas.draw()                    # finalise layout including colorbar
+        bbox = ax.get_position()
+        ax_w = fig.get_size_inches()[0] * bbox.width
+        ax_h = fig.get_size_inches()[1] * bbox.height
+        x_range = x_lim[1] - x_lim[0]
+        y_range = y_lim[1] - y_lim[0]
+        x_scale = x_range / max(ax_w, 1e-6)
+        y_scale = y_range / max(ax_h, 1e-6)
+        if x_scale < y_scale:
+            new_x_range = y_scale * ax_w
+            cx = (x_lim[0] + x_lim[1]) / 2
+            x_lim = [cx - new_x_range / 2, cx + new_x_range / 2]
+        else:
+            new_y_range = x_scale * ax_h
+            cy = (y_lim[0] + y_lim[1]) / 2
+            y_lim = [cy - new_y_range / 2, cy + new_y_range / 2]
 
     # Set axis limits if provided
     if x_lim is not None:
@@ -233,6 +346,8 @@ def _plot_on_ax(
     if show_key == True:
         ax.legend(loc='upper left', framealpha=0.4)
 
+    return (x_lim, y_lim, plot_cmap, plot_norm)
+
 
 def create_custom_colormap(base_cmap='jet'):
     'Need to add white to the base of the map'
@@ -263,16 +378,17 @@ def RSM_plot_sep(
     dat: Tuple[Any],
     threshold_filt: float = 0,
     grid_filt: float = 100,
-    x_lim: Optional[Tuple[float, float]] = None,
-    y_lim: Optional[Tuple[float, float]] = None,
+    x_lim: Optional[Union[Tuple[float, float], str]] = None,
+    y_lim: Optional[Union[Tuple[float, float], str]] = None,
     plot_type: str = 'scatter',
     ax_unit: str = 'reciprocal',
     show_key: bool = True,
     resolution_scaling: Optional[float] = None, # New parameter to scale the resolution of the meshgrid
     string_suppress: bool = False,  # New parameter to suppress string labels
-    intensity_lim: Optional[List[float]] = None, # New parameter to set intensity limits
+    intensity_lim: Optional[Union[List[float], str]] = None, # [log10_min, log10_max] or 'auto'
     title_on: bool = False, # New parameter to show/hide plot title
     color_bar: bool = True, # New parameter to show/hide colorbar
+    denoise_size: Optional[int] = None, # Remove connected noise spots smaller than this many pixels
 ) -> Figure:
     """
     Plot multiple datasets in separate subplots.
@@ -316,7 +432,8 @@ def RSM_plot_sep(
                         grid_filt = grid_filt,
                         plot_type = plot_type, ax_unit = ax_unit, colormap= custom_cmap , label_str=label_str,
                         x_lim=x_lim, y_lim=y_lim, resolution_scaling=resolution_scaling, first_index=first_index,
-                        show_key=show_key, intensity_lim=intensity_lim, show_title=title_on, show_colorbar=color_bar)
+                        show_key=show_key, intensity_lim=intensity_lim, show_title=title_on, show_colorbar=color_bar,
+                        denoise_size=denoise_size)
             subplot_counter += 1
             first_index = False
             
@@ -330,18 +447,19 @@ def RSM_plot_single(
     dat: Any,
     threshold_filt: float = 0,
     grid_filt: float = 100,
-    x_lim: Optional[Tuple[float, float]] = None,
-    y_lim: Optional[Tuple[float, float]] = None,
+    x_lim: Optional[Union[Tuple[float, float], str]] = None,
+    y_lim: Optional[Union[Tuple[float, float], str]] = None,
     plot_type: str = 'scatter',
     ax_unit: str = 'reciprocal',
     show_key: bool = True,
     resolution_scaling: Optional[float] = None,
     string_suppress: bool = False,
-    intensity_lim: Optional[List[float]] = None,
+    intensity_lim: Optional[Union[List[float], str]] = None,
     title_on: bool = False,
     color_bar: bool = True,
     export_data: bool = False,
     fitted_peaks: Optional[pd.DataFrame] = None,
+    denoise_size: Optional[int] = None,
 ) -> Figure:
     """
     Plot a single RSM dataset with consistent figure styling.
@@ -392,7 +510,7 @@ def RSM_plot_single(
                 plot_type=plot_type, ax_unit=ax_unit, colormap=custom_cmap, label_str=label_str,
                 x_lim=x_lim, y_lim=y_lim, resolution_scaling=resolution_scaling, first_index=True,
                 show_key=show_key, intensity_lim=intensity_lim, show_title=title_on, show_colorbar=color_bar,
-                fitted_peaks=fitted_peaks)
+                fitted_peaks=fitted_peaks, denoise_size=denoise_size)
     
     fig.tight_layout()
     plt.show()
@@ -404,14 +522,15 @@ def RSM_plot_fitting(
     fitted_peaks: pd.DataFrame,
     threshold_filt: float = 10,
     grid_filt: float = 90,
-    x_lim: Optional[Tuple[float, float]] = None,
-    y_lim: Optional[Tuple[float, float]] = None,
+    x_lim: Optional[Union[Tuple[float, float], str]] = None,
+    y_lim: Optional[Union[Tuple[float, float], str]] = None,
     plot_type: str = 'mesh',
     ax_unit: str = 'reciprocal',
     resolution_scaling: Optional[float] = None,
-    intensity_lim: Optional[List[float]] = None,
+    intensity_lim: Optional[Union[List[float], str]] = None,
     export_data: bool = False,
     residuals: bool = False,
+    denoise_size: Optional[int] = None,
 ) -> Figure:
     """
     Display RSM data alongside fitted simulation for visual validation.
@@ -466,14 +585,18 @@ def RSM_plot_fitting(
     d = class_obj.qxqz_df[count_d]
 
     # --- Left panel: measured RSM data ---
-    _plot_on_ax(ax_data, d, class_obj, count_d, threshold_filt=threshold_filt,
+    # Pass intensity_lim straight through (including 'auto') so _plot_on_ax
+    # handles the STO overflow colormap.  It returns the resolved cmap/norm
+    # for reuse in the simulation panel.
+    x_lim, y_lim, _resolved_cmap, _resolved_norm = _plot_on_ax(
+                ax_data, d, class_obj, count_d, threshold_filt=threshold_filt,
                 grid_filt=grid_filt,
                 plot_type=plot_type, ax_unit=ax_unit, colormap=custom_cmap,
                 label_str=None,
                 x_lim=x_lim, y_lim=y_lim, resolution_scaling=resolution_scaling,
                 first_index=False, show_key=False, intensity_lim=intensity_lim,
                 show_title=False, show_colorbar=False,
-                fitted_peaks=None)
+                fitted_peaks=None, denoise_size=denoise_size)
     ax_data.set_title('Measured', fontsize=9)
 
     # --- Overlay fitted peak markers on left panel ---
@@ -485,7 +608,7 @@ def RSM_plot_fitting(
     grid_qz = grid_data[:, :, 1]
 
     # Optionally interpolate to higher resolution (match left panel)
-    if resolution_scaling is not None:
+    if resolution_scaling is not None and resolution_scaling != 1:
         nx = int(grid_qx.shape[1] * resolution_scaling)
         ny = int(grid_qx.shape[0] * resolution_scaling)
         xi = np.linspace(grid_qx.min(), grid_qx.max(), nx)
@@ -500,15 +623,18 @@ def RSM_plot_fitting(
     coords_flat = np.array([sim_qx.flatten(), sim_qz.flatten()])
 
     if fitted_peaks is not None and not fitted_peaks.empty:
+        # Exclude not-found placeholder rows (NaN peak data)
+        valid_peaks = fitted_peaks[~fitted_peaks.get('_not_found', False).astype(bool)]
+
         # Use the film background (from any film peak row, they share the same value)
-        film_rows = fitted_peaks[~fitted_peaks['is_substrate']]
+        film_rows = valid_peaks[~valid_peaks['is_substrate']]
         if not film_rows.empty and 'background' in film_rows.columns:
             bg = film_rows.iloc[0]['background']
         else:
             bg = 0.0
         sim_flat = np.full(coords_flat.shape[1], bg)
 
-        for _, pk in fitted_peaks.iterrows():
+        for _, pk in valid_peaks.iterrows():
             sim_flat += _pseudo_voigt_2d(
                 coords_flat, pk['intensity'], pk['qx'], pk['qz'],
                 pk['sigma_x'], pk['sigma_z'], pk['eta'],
@@ -518,16 +644,11 @@ def RSM_plot_fitting(
     # Apply same threshold as the data panel
     sim_int[sim_int < threshold_filt] = 0.0
 
-    vmin = None
-    vmax = None
-    if intensity_lim is not None:
-        vmin = 10**intensity_lim[0]
-        vmax = 10**intensity_lim[1]
-
-    # Plot simulated RSM
+    # Plot simulated RSM — reuse the colormap & norm from the measured panel
+    # so both panels have identical colour scaling (including STO overflow).
     sim_int_plot = np.ma.masked_where(sim_int <= 0, sim_int)
-    p_sim = ax_sim.pcolormesh(sim_qx, sim_qz, sim_int_plot, cmap=custom_cmap,
-                              shading='auto', norm=LogNorm(vmin=vmin, vmax=vmax))
+    p_sim = ax_sim.pcolormesh(sim_qx, sim_qz, sim_int_plot, cmap=_resolved_cmap,
+                              shading='auto', norm=_resolved_norm)
     ax_sim.set_title('Fitted simulation', fontsize=9)
     ax_sim.set_xlabel(r"$Q_{\parallel} \,(2\pi/\mathrm{\AA})$")
     ax_sim.set_ylabel(r"$Q_{\perp} \,(2\pi/\mathrm{\AA})$")
@@ -571,10 +692,20 @@ def RSM_plot_fitting(
                 dist_sto = np.sqrt((sim_qx - pk['qx'])**2 + (sim_qz - pk['qz'])**2)
                 resid[dist_sto < er] = 0.0
 
-        # Use a diverging colormap so positive = unmodelled signal
-        resid_abs_max = max(np.abs(resid).max(), 1e-6)
+        # Mask residuals where neither measured nor simulated has signal
+        # (avoids Pseudo-Voigt tails in empty regions dominating the scale)
+        has_signal = (meas_on_sim > threshold_filt) | (sim_int > threshold_filt)
+        resid_display = np.where(has_signal, resid, 0.0)
+
+        # Auto-scale to the actual data range (percentile-robust)
+        nonzero = resid_display[has_signal]
+        if len(nonzero) > 0:
+            resid_abs_max = max(np.percentile(np.abs(nonzero), 99), 1e-6)
+        else:
+            resid_abs_max = 1e-6
         from matplotlib.colors import TwoSlopeNorm
         resid_norm = TwoSlopeNorm(vmin=-resid_abs_max, vcenter=0, vmax=resid_abs_max)
+        resid = resid_display
 
         p_resid = ax_resid.pcolormesh(sim_qx, sim_qz, resid, cmap='RdBu_r',
                                       shading='auto', norm=resid_norm)
@@ -597,11 +728,18 @@ def RSM_plot_fitting(
 
 def _overlay_peak_markers(ax: plt.Axes, fitted_peaks: Optional[pd.DataFrame],
                           ax_unit: str = 'reciprocal') -> None:
-    """Draw numbered peak markers and STO exclusion zone on an axis."""
+    """Draw numbered peak markers, STO exclusion zone, fit radii, and legend."""
     if fitted_peaks is None or fitted_peaks.empty:
         return
 
+    # Track legend handles (avoid duplicates)
+    _legend_handles = {}
+
     for _, pk in fitted_peaks.iterrows():
+        # Skip not-found placeholder rows (no position to plot)
+        if pk.get('_not_found', False) or pd.isna(pk.get('qx')):
+            continue
+
         if ax_unit == 'reciprocal':
             px, pz = pk['qx'], pk['qz']
         elif ax_unit == 'lattice':
@@ -626,28 +764,63 @@ def _overlay_peak_markers(ax: plt.Axes, fitted_peaks: Optional[pd.DataFrame],
                     path_effects=[pe.withStroke(linewidth=2, foreground='white')],
                     zorder=11)
 
-        # STO exclusion zone (red dashed)
-        if (ax_unit == 'reciprocal' and is_sub
-                and 'sto_exclusion_radius' in pk.index):
-            er = pk['sto_exclusion_radius']
-            excl = plt.Circle((px, pz), er, fill=False,
-                              edgecolor='red', linewidth=1.2,
-                              linestyle='--', alpha=0.9, zorder=9)
-            ax.add_patch(excl)
+        if ax_unit == 'reciprocal' and is_sub:
+            # STO fit radius (black dotted)
+            if 'sto_fit_radius' in pk.index:
+                sfr = pk['sto_fit_radius']
+                lbl = 'STO fit radius' if 'sto_fit' not in _legend_handles else None
+                circ_fit = plt.Circle((px, pz), sfr, fill=False,
+                                      edgecolor='black', linewidth=1.0,
+                                      linestyle=':', alpha=0.9, zorder=9,
+                                      label=lbl)
+                ax.add_patch(circ_fit)
+                if lbl:
+                    _legend_handles['sto_fit'] = circ_fit
+
+            # STO exclusion radius (red dashed)
+            if 'sto_exclusion_radius' in pk.index:
+                er = pk['sto_exclusion_radius']
+                lbl = 'STO exclusion radius' if 'sto_excl' not in _legend_handles else None
+                circ_excl = plt.Circle((px, pz), er, fill=False,
+                                       edgecolor='red', linewidth=1.2,
+                                       linestyle='--', alpha=0.9, zorder=9,
+                                       label=lbl)
+                ax.add_patch(circ_excl)
+                if lbl:
+                    _legend_handles['sto_excl'] = circ_excl
+
+        elif ax_unit == 'reciprocal' and not is_sub:
+            # Film peak fit radius (grey dotted)
+            if 'fit_radius' in pk.index:
+                fr = pk['fit_radius']
+                lbl = 'Film fit radius' if 'film_fit' not in _legend_handles else None
+                circ_film = plt.Circle((px, pz), fr, fill=False,
+                                       edgecolor='grey', linewidth=0.8,
+                                       linestyle=':', alpha=0.6, zorder=8,
+                                       label=lbl)
+                ax.add_patch(circ_film)
+                if lbl:
+                    _legend_handles['film_fit'] = circ_film
+
+    # Add legend if any circles were drawn
+    if _legend_handles:
+        ax.legend(handles=list(_legend_handles.values()), loc='lower right',
+                  fontsize=7, framealpha=0.8)
 
 
 def RSM_plot_same(
     dat: Tuple[Any],
     threshold_filt: float = 0,
     grid_filt: float = 100,
-    x_lim: Optional[Tuple[float, float]] = None,
-    y_lim: Optional[Tuple[float, float]] = None,
+    x_lim: Optional[Union[Tuple[float, float], str]] = None,
+    y_lim: Optional[Union[Tuple[float, float], str]] = None,
     plot_type: str = 'scatter',
     ax_unit: str = 'reciprocal',
     show_key: bool = True,
     resolution_scaling: Optional[float] = None, # New parameter to scale the resolution of the meshgrid
     title_on: bool = False, # New parameter to show/hide plot title
     color_bar: bool = True, # New parameter to show/hide colorbar
+    denoise_size: Optional[int] = None,
 ) -> Figure:
     """
     Plot multiple datasets on a single set of axes.
@@ -680,7 +853,7 @@ def RSM_plot_same(
                         grid_filt = grid_filt,
                         plot_type = plot_type, ax_unit = ax_unit, colormap=cmap, label_str=label_str,
                         x_lim=x_lim, y_lim=y_lim, contour_color=True, show_colorbar=color_bar, first_index=first_index, resolution_scaling=resolution_scaling,
-                        show_key=show_key, show_title=title_on)
+                        show_key=show_key, show_title=title_on, denoise_size=denoise_size)
             col_counter += 1
             first_index = False
     fig.tight_layout()
@@ -773,14 +946,33 @@ def _multi_peak_residuals(params: np.ndarray, coords: np.ndarray,
     return model - observed
 
 
+def _measured_intensity(flat_qx: np.ndarray, flat_qz: np.ndarray,
+                        flat_int: np.ndarray, qx0: float, qz0: float,
+                        radius: float = 0.005, top_n: int = 5) -> float:
+    """Robust measured peak intensity: mean of top-N raw points within radius.
+
+    Uses the brightest *top_n* points inside a small disc around (qx0, qz0)
+    rather than a single pixel max (noisy) or fitted amplitude (model-dependent).
+    """
+    r2 = (flat_qx - qx0)**2 + (flat_qz - qz0)**2
+    mask = r2 <= radius**2
+    if mask.sum() == 0:
+        return np.nan
+    pts = flat_int[mask]
+    n = min(top_n, len(pts))
+    return float(np.mean(np.sort(pts)[-n:]))
+
+
 # =============================================================================
 # Peak search and fitting
 # =============================================================================
 def peak_search(
     RSM_data,
     no_peaks: int = 4,
+    dummy_peaks: Optional[int] = None,
     smooth_sigma: float = 5.0,
     fit_radius: float = 0.1,
+    sto_fit_radius: Optional[float] = None,
     search_index: int = 0,
     sto_search_tol: float = 0.06,
     sto_exclusion_radius: float = 0.1,
@@ -793,6 +985,7 @@ def peak_search(
     refine: bool = True,
     qx_range: Optional[Tuple[float, float]] = None,
     qz_range: Optional[Tuple[float, float]] = None,
+    sto_sigma_max: float = 0.02,
 ) -> pd.DataFrame:
     """
     Semi-automatic peak detection and fitting on a 2D reciprocal space map.
@@ -809,8 +1002,14 @@ def peak_search(
     Parameters:
         RSM_data              : RSM class instance containing the data.
         no_peaks              : Number of film peaks to search for (excluding STO).
+        dummy_peaks           : Extra "not found" placeholder rows to add (for invisible
+                                peaks the algorithm can't detect). Total material slots
+                                become no_peaks + dummy_peaks. Default None (0).
         smooth_sigma          : Sigma for Gaussian smoothing in the coarse search.
         fit_radius            : Radius in reciprocal space units around each peak for fitting.
+        sto_fit_radius        : Radius for STO fitting specifically. If None, uses fit_radius.
+                                Use a small value (e.g. 0.03–0.05) to exclude analyzer
+                                streaks from the STO fit and get a sharper peak profile.
         search_index          : Index of the dataset within RSM_data to use (default 0).
         sto_search_tol        : Tolerance in Qx/Qz around known STO position for auto-detection.
         sto_exclusion_radius  : Radius around STO to exclude from film peak search.
@@ -824,11 +1023,20 @@ def peak_search(
         refine                : If True, do Pseudo-Voigt refinement. If False, use coarse only.
         qx_range              : Optional (min, max) bounds for Qx; peaks outside are ignored.
         qz_range              : Optional (min, max) bounds for Qz; peaks outside are ignored.
+        sto_sigma_max         : Upper bound on STO peak sigma (σx, σz) during fitting.
+                                Sharp single-crystal substrates need small values (e.g. 0.005).
+                                Default 0.02. Decrease if the simulated STO is too broad.
 
     Returns:
-        DataFrame with columns: peak_id, qx, qz, a, c, intensity, sigma_x, sigma_z,
-                                eta, is_substrate, material, sample_name,
-                                fit_radius, sto_exclusion_radius, intensity_threshold
+        DataFrame with columns: peak_id, qx, qz, a, c, intensity,
+                                intensity_measured, intensity_norm,
+                                sigma_x, sigma_z, eta, is_substrate, material,
+                                sample_name, fit_radius, sto_exclusion_radius,
+                                intensity_threshold.
+        intensity          : fitted Pseudo-Voigt amplitude (model-dependent).
+        intensity_measured : robust mean of top-5 raw data points within r=0.005
+                             of the fitted peak position (model-independent).
+        intensity_norm     : intensity_measured / STO intensity_measured.
     """
     import time
     t0 = time.time()
@@ -873,9 +1081,11 @@ def peak_search(
 
     if np.any(sto_mask):
         sto_idx = np.where(sto_mask)[0][0]
+        # Use raw intensity at the coarse peak position (not smoothed)
+        sto_raw_int = float(grid_int[max_indices[sto_idx, 0], max_indices[sto_idx, 1]])
         sto_coarse = {
             'qx': max_qx[sto_idx], 'qz': max_qz[sto_idx],
-            'intensity': max_intensities[sto_idx],
+            'intensity': sto_raw_int,
         }
         print(f"FOUND at Qx={sto_coarse['qx']:.5f}, Qz={sto_coarse['qz']:.5f}")
 
@@ -883,29 +1093,44 @@ def peak_search(
         if refine:
             print(f"  [Step 2b] Fitting STO individually...", end=' ')
             t_sto = time.time()
+            _sto_fr = sto_fit_radius if sto_fit_radius is not None else fit_radius
             dist_sto = np.sqrt((flat_qx - sto_coarse['qx'])**2 +
                                (flat_qz - sto_coarse['qz'])**2)
-            sto_fit_mask = dist_sto < fit_radius
+            sto_fit_mask = dist_sto < _sto_fr
             s_qx = flat_qx[sto_fit_mask]
             s_qz = flat_qz[sto_fit_mask]
             s_int = flat_int[sto_fit_mask]
             n_sto = len(s_qx)
 
             if n_sto > max_fit_points:
+                # Stratified sampling: always keep the brightest points
+                # (the peak) to ensure the peak shape is well-constrained,
+                # then fill remaining slots with random background points.
+                intensity_order = np.argsort(-s_int)
+                n_bright = min(max_fit_points // 2,
+                               int((s_int > np.percentile(s_int, 90)).sum()))
+                n_bright = max(n_bright, 100)
+                bright_idx = intensity_order[:n_bright]
+                other_idx = intensity_order[n_bright:]
                 rng = np.random.default_rng(42)
-                sub_idx = rng.choice(n_sto, max_fit_points, replace=False)
+                bg_idx = rng.choice(other_idx, max_fit_points - n_bright,
+                                    replace=False)
+                sub_idx = np.concatenate([bright_idx, bg_idx])
                 s_qx, s_qz, s_int = s_qx[sub_idx], s_qz[sub_idx], s_int[sub_idx]
                 n_sto = max_fit_points
 
             if n_sto >= 10:
                 coords = np.array([s_qx, s_qz])
                 bg0 = float(np.percentile(s_int, 10))
+                # STO is a sharp substrate peak — sigma bounded by sto_sigma_max.
+                sto_sig0 = min(0.002, sto_sigma_max)
                 p0 = np.array([bg0, sto_coarse['intensity'], sto_coarse['qx'],
-                               sto_coarse['qz'], 0.02, 0.02, 0.5])
+                               sto_coarse['qz'], sto_sig0, sto_sig0, 0.5])
                 lb = np.array([0, 0, sto_coarse['qx'] - 0.05, sto_coarse['qz'] - 0.05,
-                               0.001, 0.001, 0.0])
+                               1e-5, 1e-5, 0.0])
                 ub = np.array([sto_coarse['intensity'], sto_coarse['intensity'] * 10,
-                               sto_coarse['qx'] + 0.05, sto_coarse['qz'] + 0.05, 0.2, 0.2, 1.0])
+                               sto_coarse['qx'] + 0.05, sto_coarse['qz'] + 0.05,
+                               sto_sigma_max, sto_sigma_max, 1.0])
 
                 def _single_residual(params, coords, obs):
                     return params[0] + _pseudo_voigt_2d(coords, *params[1:]) - obs
@@ -923,14 +1148,19 @@ def peak_search(
                         'background': fp[0],
                     }
                     print(f"converged={result.success}, Qx={fp[2]:.5f}, "
-                          f"Qz={fp[3]:.5f} ({time.time()-t_sto:.2f}s)")
+                          f"Qz={fp[3]:.5f}, σx={fp[4]:.5f}, σz={fp[5]:.5f}, "
+                          f"η={fp[6]:.3f} ({time.time()-t_sto:.2f}s)")
                 except Exception as e:
                     print(f"fit failed ({e}), using coarse position")
-                    sto_peak = {**sto_coarse, 'sigma_x': 0.02, 'sigma_z': 0.02, 'eta': 0.5, 'background': 0.0}
+                    sto_peak = {**sto_coarse, 'sigma_x': 0.002, 'sigma_z': 0.002, 'eta': 0.5, 'background': 0.0}
             else:
-                sto_peak = {**sto_coarse, 'sigma_x': 0.02, 'sigma_z': 0.02, 'eta': 0.5, 'background': 0.0}
+                sto_peak = {**sto_coarse, 'sigma_x': 0.002, 'sigma_z': 0.002, 'eta': 0.5, 'background': 0.0}
         else:
-            sto_peak = {**sto_coarse, 'sigma_x': 0.02, 'sigma_z': 0.02, 'eta': 0.5, 'background': 0.0}
+            sto_peak = {**sto_coarse, 'sigma_x': 0.002, 'sigma_z': 0.002, 'eta': 0.5, 'background': 0.0}
+
+        # Measured intensity: robust mean of top-5 raw points near fitted STO position
+        sto_peak['intensity_measured'] = _measured_intensity(
+            flat_qx, flat_qz, flat_int, sto_peak['qx'], sto_peak['qz'])
     else:
         print("NOT FOUND - check sto_search_tol or data range")
 
@@ -1028,10 +1258,18 @@ def peak_search(
         fit_int = flat_int[combined_mask]
         n_pts = len(fit_qx)
 
-        # Subsample if needed
+        # Subsample if needed — stratified to preserve peak points
         if n_pts > max_fit_points:
+            intensity_order = np.argsort(-fit_int)
+            n_bright = min(max_fit_points // 2,
+                           int((fit_int > np.percentile(fit_int, 90)).sum()))
+            n_bright = max(n_bright, 100)
+            bright_idx = intensity_order[:n_bright]
+            other_idx = intensity_order[n_bright:]
             rng = np.random.default_rng(42)
-            sub_idx = rng.choice(n_pts, max_fit_points, replace=False)
+            bg_idx = rng.choice(other_idx, max_fit_points - n_bright,
+                                replace=False)
+            sub_idx = np.concatenate([bright_idx, bg_idx])
             fit_qx, fit_qz, fit_int = fit_qx[sub_idx], fit_qz[sub_idx], fit_int[sub_idx]
             n_pts = max_fit_points
 
@@ -1072,7 +1310,8 @@ def peak_search(
                     })
                 print(f"converged={result.success}, {n_pts} pts ({time.time()-t_fit:.2f}s)")
                 for i, rpk in enumerate(refined_film):
-                    print(f"    Film {i}: Qx={rpk['qx']:.5f}, Qz={rpk['qz']:.5f}")
+                    print(f"    Film {i}: Qx={rpk['qx']:.5f}, Qz={rpk['qz']:.5f}, "
+                          f"σx={rpk['sigma_x']:.5f}, σz={rpk['sigma_z']:.5f}, η={rpk['eta']:.3f}")
             except Exception as e:
                 print(f"fit failed ({e}), using coarse positions")
                 for pk in film_peaks:
@@ -1082,7 +1321,15 @@ def peak_search(
         for pk in film_peaks:
             refined_film.append({**pk, 'sigma_x': 0.02, 'sigma_z': 0.02, 'eta': 0.5, 'background': 0.0})
 
+    # Measured intensity for each film peak (robust mean of top-5 raw points)
+    for pk in refined_film:
+        pk['intensity_measured'] = _measured_intensity(
+            flat_qx, flat_qz, flat_int, pk['qx'], pk['qz'])
+
     # --- Step 6: Build output DataFrame ---
+    # STO measured intensity for normalisation
+    sto_int_meas = sto_peak.get('intensity_measured', np.nan) if sto_peak is not None else np.nan
+
     rows = []
     # STO first
     if sto_peak is not None:
@@ -1093,6 +1340,8 @@ def peak_search(
             'a': _Qx_to_a(sto_peak['qx']),
             'c': _Qz_to_c(sto_peak['qz']),
             'intensity': sto_peak['intensity'],
+            'intensity_measured': sto_peak.get('intensity_measured', np.nan),
+            'intensity_norm': 1.0,
             'sigma_x': sto_peak.get('sigma_x', 0.02),
             'sigma_z': sto_peak.get('sigma_z', 0.02),
             'eta': sto_peak.get('eta', 0.5),
@@ -1103,12 +1352,22 @@ def peak_search(
             'sample_code': sample_code,
             'Ba_doping': None,
             'La_doping': None,
+            'O2_growth_pressure': None,
+            'T_growth': None,
+            'n_pulses': None,
+            'thickness_nm': None,
+            'Hz': None,
+            'E_mJ': None,
             'fit_radius': fit_radius,
+            'sto_fit_radius': sto_fit_radius if sto_fit_radius is not None else fit_radius,
             'sto_exclusion_radius': sto_exclusion_radius,
             'intensity_threshold': intensity_threshold,
+            '_not_found': False,
         })
     # Film peaks
     for i, pk in enumerate(refined_film):
+        pk_int_meas = pk.get('intensity_measured', np.nan)
+        pk_norm = pk_int_meas / sto_int_meas if (np.isfinite(pk_int_meas) and np.isfinite(sto_int_meas) and sto_int_meas > 0) else np.nan
         rows.append({
             'peak_id': len(rows),
             'qx': pk['qx'],
@@ -1116,6 +1375,8 @@ def peak_search(
             'a': _Qx_to_a(pk['qx']),
             'c': _Qz_to_c(pk['qz']),
             'intensity': pk['intensity'],
+            'intensity_measured': pk_int_meas,
+            'intensity_norm': pk_norm,
             'sigma_x': pk['sigma_x'],
             'sigma_z': pk['sigma_z'],
             'eta': pk['eta'],
@@ -1126,9 +1387,51 @@ def peak_search(
             'sample_code': sample_code,
             'Ba_doping': None,
             'La_doping': None,
+            'O2_growth_pressure': None,
+            'T_growth': None,
+            'n_pulses': None,
+            'thickness_nm': None,
+            'Hz': None,
+            'E_mJ': None,
             'fit_radius': fit_radius,
             'sto_exclusion_radius': sto_exclusion_radius,
             'intensity_threshold': intensity_threshold,
+            '_not_found': False,
+        })
+
+    # Pad with "not found" placeholder rows if fewer peaks than requested
+    n_found = len(refined_film)
+    n_total_expected = no_peaks + (dummy_peaks or 0)
+    for _ in range(n_total_expected - n_found):
+        rows.append({
+            'peak_id': len(rows),
+            'qx': np.nan,
+            'qz': np.nan,
+            'a': np.nan,
+            'c': np.nan,
+            'intensity': np.nan,
+            'intensity_measured': np.nan,
+            'intensity_norm': np.nan,
+            'sigma_x': np.nan,
+            'sigma_z': np.nan,
+            'eta': np.nan,
+            'background': np.nan,
+            'is_substrate': False,
+            'material': None,
+            'sample_name': sample_name,
+            'sample_code': sample_code,
+            'Ba_doping': None,
+            'La_doping': None,
+            'O2_growth_pressure': None,
+            'T_growth': None,
+            'n_pulses': None,
+            'thickness_nm': None,
+            'Hz': None,
+            'E_mJ': None,
+            'fit_radius': fit_radius,
+            'sto_exclusion_radius': sto_exclusion_radius,
+            'intensity_threshold': intensity_threshold,
+            '_not_found': True,
         })
 
     peaks_df = pd.DataFrame(rows)
@@ -1138,14 +1441,24 @@ def peak_search(
     print(f"  Peak Search Results for: {sample_name}  (total time: {time.time()-t0:.1f}s)")
     print(f"{'='*80}")
     print(f"  {'ID':<4} {'Material':<12} {'Qx (2π/Å)':<12} {'Qz (2π/Å)':<12} "
-          f"{'a (Å)':<10} {'c (Å)':<10} {'Intensity':<12} {'η':<6}")
-    print(f"  {'-'*76}")
+          f"{'a (Å)':<10} {'c (Å)':<10} {'I_meas':<10} {'I_norm':<8} {'η':<6}")
+    print(f"  {'-'*82}")
 
     for _, row in peaks_df.iterrows():
         mat_str = row['material'] if row['material'] else '---'
-        sub_tag = ' [substrate]' if row['is_substrate'] else ''
-        print(f"  {row['peak_id']:<4} {mat_str:<12} {row['qx']:<12.5f} {row['qz']:<12.5f} "
-              f"{row['a']:<10.4f} {row['c']:<10.4f} {row['intensity']:<12.1f} {row['eta']:<6.3f}{sub_tag}")
+        if row.get('_not_found', False):
+            print(f"  {row['peak_id']:<4} {'(not found)':<12} {'—':<12} {'—':<12} "
+                  f"{'—':<10} {'—':<10} {'—':<10} {'—':<8} {'—':<6}")
+        elif row['is_substrate']:
+            sub_tag = ' [substrate]'
+            i_meas = f"{row['intensity_measured']:.1f}" if np.isfinite(row['intensity_measured']) else '—'
+            print(f"  {row['peak_id']:<4} {mat_str:<12} {row['qx']:<12.5f} {row['qz']:<12.5f} "
+                  f"{row['a']:<10.4f} {row['c']:<10.4f} {i_meas:<10} {'1.000':<8} {row['eta']:<6.3f}{sub_tag}")
+        else:
+            i_meas = f"{row['intensity_measured']:.1f}" if np.isfinite(row['intensity_measured']) else '—'
+            i_norm = f"{row['intensity_norm']:.4f}" if np.isfinite(row['intensity_norm']) else '—'
+            print(f"  {row['peak_id']:<4} {mat_str:<12} {row['qx']:<12.5f} {row['qz']:<12.5f} "
+                  f"{row['a']:<10.4f} {row['c']:<10.4f} {i_meas:<10} {i_norm:<8} {row['eta']:<6.3f}")
 
     print(f"{'='*80}")
 
@@ -1173,7 +1486,13 @@ def peak_assign(
     Interactively assign material labels to fitted peaks.
 
     For each non-substrate peak, the user is prompted to select a material from a
-    numbered list. The DataFrame is updated in-place and returned.
+    numbered list.  Special options:
+      - **Double**: the peak is a double peak shared by two materials. Two
+        follow-up prompts assign materials (i) and (ii). A duplicate row is
+        created for the second material (same peak data, new peak_id).
+      - Not-found peaks (NaN positions) are shown as "(not found)" and can
+        still be assigned a material label so growth parameters can be
+        manually filled in later.
 
     Parameters:
         peaks_df  : DataFrame returned by peak_search().
@@ -1187,46 +1506,125 @@ def peak_assign(
 
     # Build numbered option list (excluding STO which is auto-assigned)
     mat_keys = [k for k in materials.keys() if k != 'STO']
+    n_mat = len(mat_keys)
+    opt_other  = n_mat + 1
+    opt_double = n_mat + 2
+    opt_skip   = n_mat + 3
+
     print("\nAvailable materials:")
     for i, key in enumerate(mat_keys):
         print(f"  {i + 1}: {key} ({materials[key]['name']}, a={materials[key]['a_bulk']:.3f} Å)")
-    print(f"  {len(mat_keys) + 1}: Other (enter custom label)")
-    print(f"  {len(mat_keys) + 2}: Skip")
+    print(f"  {opt_other}: Other (enter custom label)")
+    print(f"  {opt_double}: Double (assign two materials to this peak)")
+    print(f"  {opt_skip}: Skip")
     print()
+
+    extra_rows = []  # rows to append for double-peak second material
+
+    # Count how many non-substrate material slots we expect to fill
+    n_target = len(peaks_df[peaks_df['is_substrate'] != True])
+    n_assigned = 0  # tracks materials assigned so far (double counts as 2)
 
     for idx, row in peaks_df.iterrows():
         if row['is_substrate']:
             continue  # STO already assigned
         if row['material'] is not None:
+            n_assigned += 1
             continue  # already assigned from a previous run
 
-        print(f"\nPeak {int(row['peak_id'])}: Qx={row['qx']:.5f}, Qz={row['qz']:.5f} | "
-              f"a={row['a']:.4f} Å, c={row['c']:.4f} Å | Intensity={row['intensity']:.1f}")
+        is_nf = row.get('_not_found', False) or (pd.isna(row['qx']))
+
+        # If enough materials assigned (e.g. via doubles), skip remaining not-found placeholders
+        if is_nf and n_assigned >= n_target:
+            print(f"\n  Peak {int(row['peak_id'])} (not found): skipped — "
+                  f"all {n_target} material slots already assigned")
+            continue
+
+        if is_nf:
+            print(f"\nPeak {int(row['peak_id'])} (not found): no detected position — "
+                  "assign a material to create a placeholder row")
+        else:
+            print(f"\nPeak {int(row['peak_id'])}: Qx={row['qx']:.5f}, Qz={row['qz']:.5f} | "
+                  f"a={row['a']:.4f} Å, c={row['c']:.4f} Å | Intensity={row['intensity']:.1f}")
 
         while True:
             try:
-                choice = int(input(f"  Peak {int(row['peak_id'])}: Select material (1-{len(mat_keys) + 2}): "))
-                if 1 <= choice <= len(mat_keys):
+                choice = int(input(f"  Peak {int(row['peak_id'])}: Select material (1-{opt_skip}): "))
+                if 1 <= choice <= n_mat:
                     peaks_df.at[idx, 'material'] = mat_keys[choice - 1]
+                    n_assigned += 1
                     break
-                elif choice == len(mat_keys) + 1:
+                elif choice == opt_other:
                     custom = input("  Enter custom label: ").strip()
                     if custom:
                         peaks_df.at[idx, 'material'] = custom
+                        n_assigned += 1
                     break
-                elif choice == len(mat_keys) + 2:
+                elif choice == opt_double:
+                    # Double peak: assign two materials
+                    print(f"  Double peak — assign material (i):")
+                    mat_i = _prompt_material_choice(mat_keys, opt_other, row['peak_id'], 'i')
+                    peaks_df.at[idx, 'material'] = mat_i
+
+                    print(f"  Double peak — assign material (ii):")
+                    mat_ii = _prompt_material_choice(mat_keys, opt_other, row['peak_id'], 'ii')
+                    # Create duplicate row for second material
+                    new_row = row.copy()
+                    new_row['material'] = mat_ii
+                    extra_rows.append(new_row)
+                    n_assigned += 2  # double counts as two assignments
+                    break
+                elif choice == opt_skip:
                     break
                 else:
-                    print(f"  Invalid choice. Enter 1-{len(mat_keys) + 2}.")
+                    print(f"  Invalid choice. Enter 1-{opt_skip}.")
             except ValueError:
                 print("  Please enter a number.")
+
+    # Append double-peak rows
+    if extra_rows:
+        next_id = int(peaks_df['peak_id'].max()) + 1
+        for r in extra_rows:
+            r['peak_id'] = next_id
+            next_id += 1
+        peaks_df = pd.concat([peaks_df, pd.DataFrame(extra_rows)], ignore_index=True)
+
+    # Drop unassigned not-found placeholder rows (skipped because doubles filled the slots)
+    nf_mask = peaks_df.apply(
+        lambda r: (r.get('_not_found', False) or pd.isna(r.get('qx')))
+                  and (r.get('material') is None or pd.isna(r.get('material'))),
+        axis=1,
+    )
+    if nf_mask.any():
+        peaks_df = peaks_df[~nf_mask].reset_index(drop=True)
 
     print("\nAssignment complete:")
     for _, row in peaks_df.iterrows():
         mat_str = row['material'] if row['material'] else '---'
-        print(f"  Peak {row['peak_id']}: {mat_str} (a={row['a']:.4f}, c={row['c']:.4f})")
+        nf_tag = ' (not found)' if row.get('_not_found', False) or pd.isna(row.get('qx')) else ''
+        if pd.notna(row.get('a')) and pd.notna(row.get('c')):
+            print(f"  Peak {row['peak_id']}: {mat_str} (a={row['a']:.4f}, c={row['c']:.4f}){nf_tag}")
+        else:
+            print(f"  Peak {row['peak_id']}: {mat_str} (no peak data){nf_tag}")
 
     return peaks_df
+
+
+def _prompt_material_choice(mat_keys: list, opt_other: int, peak_id: int, label: str) -> str:
+    """Helper for double-peak sub-prompts in peak_assign."""
+    while True:
+        try:
+            choice = int(input(f"    Peak {int(peak_id)} ({label}): Select material (1-{opt_other}): "))
+            if 1 <= choice <= len(mat_keys):
+                return mat_keys[choice - 1]
+            elif choice == opt_other:
+                custom = input("    Enter custom label: ").strip()
+                if custom:
+                    return custom
+            else:
+                print(f"    Invalid choice. Enter 1-{opt_other}.")
+        except ValueError:
+            print("    Please enter a number.")
 
 
 # =============================================================================
@@ -1239,8 +1637,11 @@ def peak_store(
     """
     Save fitted and assigned peaks to an Excel file.
 
-    If the file exists, removes existing rows for the same sample_name before appending
-    (so re-running is idempotent). Creates the file if it doesn't exist.
+    If the file exists, removes existing rows for the same sample_name before
+    appending — but first copies across any manually entered data (e.g.
+    Ba_doping, La_doping, O2_growth_pressure, T_growth, n_pulses,
+    thickness_nm, Hz, E_mJ, material) from the old rows into the new rows.
+    Matching is done on (sample_name, material, peak_id).
 
     Parameters:
         peaks_df : DataFrame returned by peak_search() / peak_assign().
@@ -1248,13 +1649,44 @@ def peak_store(
     """
     xlsx_path = Path(xlsx_path)
 
+    # Columns that may contain manually entered data — never overwrite with None/NaN
+    manual_cols = [
+        'material', 'Ba_doping', 'La_doping',
+        'O2_growth_pressure', 'T_growth', 'n_pulses',
+        'thickness_nm', 'Hz', 'E_mJ',
+    ]
+
     if xlsx_path.exists():
         existing = pd.read_excel(xlsx_path, engine='openpyxl')
-        sample_names = peaks_df['sample_name'].unique()
-        existing = existing[~existing['sample_name'].isin(sample_names)]
-        combined = pd.concat([existing, peaks_df], ignore_index=True)
+        sample_names_set = set(peaks_df['sample_name'].unique())
+        old_for_sample = existing[existing['sample_name'].isin(sample_names_set)]
+
+        # Build a lookup from old rows keyed on (sample_name, material, peak_id)
+        old_lookup = {}
+        for _, old_row in old_for_sample.iterrows():
+            key = (old_row.get('sample_name'), old_row.get('material'), old_row.get('peak_id'))
+            old_lookup[key] = old_row
+
+        # Carry forward manual data from old rows into new peaks_df
+        new_df = peaks_df.copy()
+        for idx, new_row in new_df.iterrows():
+            key = (new_row.get('sample_name'), new_row.get('material'), new_row.get('peak_id'))
+            if key in old_lookup:
+                old_row = old_lookup[key]
+                for col in manual_cols:
+                    if col in old_row.index and pd.notna(old_row[col]):
+                        # Only carry forward if new value is missing
+                        if col not in new_row.index or pd.isna(new_row[col]) or new_row[col] is None:
+                            new_df.at[idx, col] = old_row[col]
+
+        remaining = existing[~existing['sample_name'].isin(sample_names_set)]
+        combined = pd.concat([remaining, new_df], ignore_index=True)
     else:
         combined = peaks_df.copy()
+
+    # Drop internal helper column before writing
+    if '_not_found' in combined.columns:
+        combined = combined.drop(columns=['_not_found'])
 
     combined.to_excel(xlsx_path, index=False, engine='openpyxl')
     print(f"Peaks saved to {xlsx_path} ({len(peaks_df)} rows for "
@@ -1331,6 +1763,7 @@ def lattice_param_2D(
     show_STO: bool = False,
     material_select: Union[bool, List[str]] = False,
     materials: Optional[Dict] = None,
+    show_key: Union[bool, str] = True,
 ) -> Figure:
     """
     Scatter plot of in-plane lattice parameter (a) vs out-of-plane (c).
@@ -1456,7 +1889,9 @@ def lattice_param_2D(
         legend_elements.append(Line2D([0], [0], marker=marker, color='grey',
                                       markerfacecolor='grey', markersize=6,
                                       linestyle='None', label=mat))
-    ax.legend(handles=legend_elements, loc='best', framealpha=0.4, fontsize=7)
+    if show_key is not False:
+        loc = show_key if isinstance(show_key, str) else 'best'
+        ax.legend(handles=legend_elements, loc=loc, framealpha=0.4, fontsize=7)
 
     fig.tight_layout()
     plt.show()
@@ -1473,6 +1908,7 @@ def lattice_param_1D(
     material_select: Union[bool, List[str]] = False,
     materials: Optional[Dict] = None,
     sample_order: Optional[List[str]] = None,
+    show_key: Union[bool, str] = True,
 ) -> Figure:
     """
     Strip plots: sample code on x-axis, in-plane (a) and out-of-plane (c) on
@@ -1602,39 +2038,70 @@ def lattice_param_1D(
         legend_elements.append(Line2D([0], [0], marker=marker, color=color,
                                       markerfacecolor=color, markersize=6,
                                       linestyle='None', label=mat))
-    ax_a.legend(handles=legend_elements, loc='best', framealpha=0.4, fontsize=7)
+    if show_key is not False:
+        loc = show_key if isinstance(show_key, str) else 'best'
+        ax_a.legend(handles=legend_elements, loc=loc, framealpha=0.4, fontsize=7)
 
     fig.tight_layout()
     plt.show()
     return fig
 
 
-def lattice_param_doping(
+def growth_optimisation_plot(
     sample_list: list,
     xlsx_path: str = 'RSM_peaks.xlsx',
-    doping_column: str = 'Ba_doping',
+    x_axis_var: str = 'Ba_doping',
+    y_axis_var: str = 'a_and_c',
+    y_axis_var_right: Optional[str] = None,
     sto_correction: bool = False,
     x_lim: Optional[Tuple[float, float]] = None,
     y_lim: Optional[Tuple[float, float]] = None,
+    y_lim_right: Optional[Tuple[float, float]] = None,
     export_data: bool = False,
     show_bulk_refs: bool = True,
     material_select: Union[bool, List[str]] = False,
     materials: Optional[Dict] = None,
+    show_key: Union[bool, str] = True,
 ) -> Figure:
     """
-    Doping-dependence plot: doping level on x-axis, lattice parameter on y-axis.
-    In-plane (a) plotted in red, out-of-plane (c) plotted in blue.
+    Growth-parameter optimisation plot: independent variable on x-axis,
+    dependent variable(s) on y-axis (and optionally right y-axis).
+
+    Independent variables (x_axis_var):
+        'Ba_doping', 'La_doping', 'O2_growth_pressure', 'T_growth',
+        'n_pulses', 'thickness_nm', 'Hz', 'E_mJ'
+        (or any numeric column in the .xlsx)
+
+    Dependent variables (y_axis_var / y_axis_var_right):
+        'a'                – in-plane lattice parameter
+        'c'                – out-of-plane lattice parameter
+        'a_and_c'          – both a (red) and c (blue) on the same axis
+        'qx'               – in-plane Q
+        'qz'               – out-of-plane Q
+        'intensity'        – fitted Pseudo-Voigt amplitude
+        'intensity_measured' – mean of top-5 raw data points at peak
+        'intensity_norm'   – film measured / STO measured
+        'sigma_x'          – in-plane peak width
+        'sigma_z'          – out-of-plane peak width
+        'eta'              – Pseudo-Voigt mixing parameter
+        'background'       – fitted background level
+        'tetragonality'    – c / a ratio
 
     Parameters:
-        sample_list      : RSM objects or sample code strings (case-insensitive).
+        sample_list      : RSM objects or sample code strings.
         xlsx_path        : Path to .xlsx peak database.
-        doping_column    : Column name for doping: 'Ba_doping' or 'La_doping'.
-        sto_correction   : Shift peaks so each sample's STO aligns with bulk reference.
-        x_lim, y_lim     : Axis limits.
-        export_data      : Publication-ready sizing from plot_style.
-        show_bulk_refs   : Show horizontal lines at bulk lattice parameters for plotted materials.
-        material_select  : False to plot all fitted materials, or a list of material labels.
+        x_axis_var       : Column name for x-axis (independent variable).
+        y_axis_var       : Column name for left y-axis (dependent variable).
+        y_axis_var_right : Column name for right y-axis (optional, plotted in red).
+        sto_correction   : Shift peaks so STO aligns with bulk reference.
+        x_lim            : X-axis limits.
+        y_lim            : Left y-axis limits.
+        y_lim_right      : Right y-axis limits.
+        export_data      : Publication-ready sizing.
+        show_bulk_refs   : Show horizontal lines for bulk lattice parameters.
+        material_select  : False to plot all, or list of material labels.
         materials        : Material dictionary (default: PEROVSKITE_MATERIALS).
+        show_key         : Legend control.
 
     Returns:
         matplotlib Figure.
@@ -1651,10 +2118,9 @@ def lattice_param_doping(
     if 'sample_code' not in df.columns:
         df['sample_code'] = df['sample_name']
 
-    # Ensure doping column exists
-    if doping_column not in df.columns:
-        print(f"  Column '{doping_column}' not found in the spreadsheet. "
-              f"Available columns: {list(df.columns)}")
+    if x_axis_var not in df.columns:
+        print(f"  Column '{x_axis_var}' not found. "
+              f"Available: {list(df.columns)}")
         return plt.figure()
 
     # Filter by material_select
@@ -1663,17 +2129,20 @@ def lattice_param_doping(
             df['material'].apply(lambda m: _material_matches(m, material_select) if pd.notna(m) else False)
         ]
     else:
-        # Exclude substrate
         df = df[df['is_substrate'] != True]
 
-    # Drop rows without doping value
-    df = df.dropna(subset=[doping_column])
+    df = df.dropna(subset=[x_axis_var])
     if df.empty:
-        print(f"No peaks with '{doping_column}' values found. "
-              "Please fill in doping values in the .xlsx file.")
+        print(f"No peaks with '{x_axis_var}' values found. "
+              "Fill in values in the .xlsx file.")
         return plt.figure()
 
-    # STO correction offsets
+    # Compute derived columns
+    df = df.copy()
+    if 'tetragonality' not in df.columns:
+        df['tetragonality'] = df['c'] / df['a']
+
+    # STO correction
     offsets = {}
     if sto_correction:
         df_full = peak_load(xlsx_path, sample_codes=sample_codes)
@@ -1686,30 +2155,88 @@ def lattice_param_doping(
                 offsets[code] = (3.905 - sto_row['a'], 3.905 - sto_row['c'])
             else:
                 offsets[code] = (0.0, 0.0)
+        for idx, row in df.iterrows():
+            scode = str(row.get('sample_code', row['sample_name'])).upper()
+            if scode in offsets:
+                df.at[idx, 'a'] = row['a'] + offsets[scode][0]
+                df.at[idx, 'c'] = row['c'] + offsets[scode][1]
+                df.at[idx, 'tetragonality'] = df.at[idx, 'c'] / df.at[idx, 'a']
 
     fig_size = set_plot_style(export_data=export_data)
     fig, ax = plt.subplots(figsize=fig_size)
 
+    # Y-axis label lookup
+    _y_labels = {
+        'a': r'$a_{\parallel}$ $(\mathrm{\AA})$',
+        'c': r'$c_{\perp}$ $(\mathrm{\AA})$',
+        'a_and_c': r'Lattice parameter $(\mathrm{\AA})$',
+        'qx': r'$Q_{\parallel}$ $(2\pi/\mathrm{\AA})$',
+        'qz': r'$Q_{\perp}$ $(2\pi/\mathrm{\AA})$',
+        'intensity': 'Fitted intensity',
+        'intensity_measured': 'Measured intensity',
+        'intensity_norm': 'Normalised intensity',
+        'sigma_x': r'$\sigma_x$',
+        'sigma_z': r'$\sigma_z$',
+        'eta': r'$\eta$ (mixing)',
+        'background': 'Background',
+        'tetragonality': r'$c/a$',
+    }
+
     plotted_materials = df['material'].dropna().unique()
 
-    for _, row in df.iterrows():
-        scode = str(row.get('sample_code', row['sample_name'])).upper()
-        mat = row['material'] if pd.notna(row['material']) else 'Unknown'
-        marker = _get_material_marker(mat, 'o')
-        doping = float(row[doping_column])
+    # --- Helper to plot one y variable on an axis ---
+    def _plot_var(axis, var_name, color, df_in):
+        if var_name == 'a_and_c':
+            for _, row in df_in.iterrows():
+                mat = row['material'] if pd.notna(row['material']) else 'Unknown'
+                marker = _get_material_marker(mat, 'o')
+                x_val = float(row[x_axis_var])
+                axis.scatter(x_val, row['a'], color='red', marker=marker, s=80,
+                             edgecolors='black', linewidths=0.5, zorder=5)
+                axis.scatter(x_val, row['c'], color='blue', marker=marker, s=80,
+                             edgecolors='black', linewidths=0.5, zorder=5)
+        else:
+            if var_name not in df_in.columns:
+                print(f"  Column '{var_name}' not found in data.")
+                return
+            for _, row in df_in.iterrows():
+                mat = row['material'] if pd.notna(row['material']) else 'Unknown'
+                marker = _get_material_marker(mat, 'o')
+                x_val = float(row[x_axis_var])
+                y_val = row[var_name]
+                if pd.notna(y_val):
+                    axis.scatter(x_val, float(y_val), color=color, marker=marker, s=80,
+                                 edgecolors='black', linewidths=0.5, zorder=5)
 
-        a_val, c_val = row['a'], row['c']
-        if sto_correction and scode in offsets:
-            a_val += offsets[scode][0]
-            c_val += offsets[scode][1]
+    # Determine left-axis colour
+    if y_axis_var == 'a_and_c':
+        left_color = 'black'
+    elif y_axis_var_right is not None:
+        left_color = 'blue'
+    else:
+        left_color = 'black'
 
-        ax.scatter(doping, a_val, color='red', marker=marker, s=80,
-                   edgecolors='black', linewidths=0.5, zorder=5)
-        ax.scatter(doping, c_val, color='blue', marker=marker, s=80,
-                   edgecolors='black', linewidths=0.5, zorder=5)
+    _plot_var(ax, y_axis_var, left_color, df)
+    ax.set_ylabel(_y_labels.get(y_axis_var, y_axis_var.replace('_', ' ').title()),
+                  color=left_color if left_color != 'black' else 'black')
+    if left_color != 'black':
+        ax.tick_params(axis='y', labelcolor=left_color)
 
-    # Bulk reference lines (only plotted materials)
-    if show_bulk_refs:
+    # --- Right y-axis ---
+    ax_right = None
+    if y_axis_var_right is not None:
+        right_color = 'red'
+        ax_right = ax.twinx()
+        _plot_var(ax_right, y_axis_var_right, right_color, df)
+        ax_right.set_ylabel(_y_labels.get(y_axis_var_right,
+                            y_axis_var_right.replace('_', ' ').title()),
+                            color=right_color)
+        ax_right.tick_params(axis='y', labelcolor=right_color)
+        if y_lim_right is not None:
+            ax_right.set_ylim(y_lim_right)
+
+    # Bulk reference lines
+    if show_bulk_refs and y_axis_var in ('a', 'c', 'a_and_c'):
         for key, mat_info in materials.items():
             if key == 'STO':
                 continue
@@ -1719,32 +2246,42 @@ def lattice_param_doping(
             ax.axhline(y=a_bulk, color='grey', linestyle='--', linewidth=1.0,
                        alpha=0.5, label=f'{key} bulk')
 
-    doping_label = doping_column.replace('_', ' ').title()
-    ax.set_xlabel(f"{doping_label}")
-    ax.set_ylabel(r"Lattice parameter $(\mathrm{\AA})$")
+    x_label = x_axis_var.replace('_', ' ').title()
+    ax.set_xlabel(f"{x_label}")
 
     if x_lim is not None:
         ax.set_xlim(x_lim)
     if y_lim is not None:
         ax.set_ylim(y_lim)
 
-    # Legend: in-plane / out-of-plane + material markers
-    legend_elements = [
-        mpatches.Patch(facecolor='red', edgecolor='black', linewidth=0.5,
-                       label=r'$a_{\parallel}$ (in-plane)'),
-        mpatches.Patch(facecolor='blue', edgecolor='black', linewidth=0.5,
-                       label=r'$c_{\perp}$ (out-of-plane)'),
-    ]
+    # Legend
+    legend_elements = []
+    if y_axis_var == 'a_and_c':
+        legend_elements.append(mpatches.Patch(facecolor='red', edgecolor='black', linewidth=0.5,
+                                              label=r'$a_{\parallel}$ (in-plane)'))
+        legend_elements.append(mpatches.Patch(facecolor='blue', edgecolor='black', linewidth=0.5,
+                                              label=r'$c_{\perp}$ (out-of-plane)'))
+    elif y_axis_var_right is not None:
+        legend_elements.append(mpatches.Patch(facecolor='blue', edgecolor='black', linewidth=0.5,
+                                              label=_y_labels.get(y_axis_var, y_axis_var)))
+        legend_elements.append(mpatches.Patch(facecolor='red', edgecolor='black', linewidth=0.5,
+                                              label=_y_labels.get(y_axis_var_right, y_axis_var_right)))
     for mat in plotted_materials:
         marker = _get_material_marker(mat, 'o')
         legend_elements.append(Line2D([0], [0], marker=marker, color='grey',
                                       markerfacecolor='grey', markersize=6,
                                       linestyle='None', label=mat))
-    ax.legend(handles=legend_elements, loc='best', framealpha=0.4, fontsize=7)
+    if show_key is not False:
+        loc = show_key if isinstance(show_key, str) else 'best'
+        ax.legend(handles=legend_elements, loc=loc, framealpha=0.4, fontsize=7)
 
     fig.tight_layout()
     plt.show()
     return fig
+
+
+# Keep old name as an alias for backwards compatibility
+lattice_param_growth = growth_optimisation_plot
 
 
 def lattice_param_tetragonality(
@@ -1758,6 +2295,7 @@ def lattice_param_tetragonality(
     sample_order: Optional[List[str]] = None,
     show_unity: bool = True,
     scatter_line: bool = True,
+    show_key: Union[bool, str] = True,
 ) -> Figure:
     """
     Scatter / line chart of tetragonality (c/a) across samples, one trace per material.
@@ -1895,8 +2433,10 @@ def lattice_param_tetragonality(
     ax.set_xticklabels(sample_order, rotation=45, ha='right', fontsize=7)
 
     # Build legend from plotted traces
-    handles, labels = ax.get_legend_handles_labels()
-    ax.legend(handles=handles, loc='best', framealpha=0.4, fontsize=7)
+    if show_key is not False:
+        loc = show_key if isinstance(show_key, str) else 'best'
+        handles, labels = ax.get_legend_handles_labels()
+        ax.legend(handles=handles, loc=loc, framealpha=0.4, fontsize=7)
 
     fig.tight_layout()
     return fig
