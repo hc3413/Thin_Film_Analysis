@@ -21,12 +21,16 @@ class SMU:
         # Lists to store data for each measurement type
         self.cv_data: list = []
         self.iv_data: list = []
+        self.iv3T_data: list = []
         self.cv_run_nums: list = []
         self.iv_run_nums: list = []
+        self.iv3T_run_nums: list = []
         self.cv_file_names: list = []
         self.iv_file_names: list = []
+        self.iv3T_file_names: list = []
         self.cv_plot_strings: list = []
         self.iv_plot_strings: list = []
+        self.iv3T_plot_strings: list = []
         
         # Load the data as you initialize the class
         self._load_data()
@@ -62,6 +66,8 @@ class SMU:
                     self._process_cv_file(fi, run_num)
                 elif 'res2t' in fi.name.lower():
                     self._process_iv_file(fi, run_num)
+                elif 'fet' in fi.name.lower() or 'id_vs_vg' in fi.name.lower():
+                    self._process_iv3T_file(fi, run_num)
                 else:
                     print(f"Warning: Unknown file type for {fi.name}")
                     
@@ -69,7 +75,7 @@ class SMU:
                 print(f"Error processing file {fi.name}: {e}")
                 continue
         
-        print(f"Loaded {len(self.cv_data)} CV files and {len(self.iv_data)} IV files")
+        print(f"Loaded {len(self.cv_data)} CV, {len(self.iv_data)} IV, {len(self.iv3T_data)} IV3T files")
 
     def _process_cv_file(self, file_path: Path, run_num: Optional[int]) -> None:
         '''Process CV (capacitance-voltage) files'''
@@ -138,6 +144,50 @@ class SMU:
             
         except Exception as e:
             print(f"Error processing IV file {file_path.name}: {e}")
+            
+            
+    def _process_iv3T_file(self, file_path: Path, run_num: Optional[int]) -> None:
+        '''Process IV 3-terminal (current-voltage) files for FETs with gate, drain, source'''
+        try:
+            # Read the Excel file
+            df = pd.read_excel(file_path, header=0)  # Use first row as header
+            
+            # Extract the required columns based on the specification
+            # Column 1 = I (A), Column 2 = V (V)
+            iv3T_df = pd.DataFrame({
+                'D_I_A': df.iloc[:, 0],    # Column 1 (0-indexed) - drain current in Amperes
+                'D_V_V': df.iloc[:, 1],     # Column 2 (0-indexed) - drain voltage in Volts
+                'G_I_A': df.iloc[:, 2],    # Column 3 (0-indexed) - gate current in Amperes
+                'G_V_V': df.iloc[:, 3],     # Column 4 (0-indexed) - gate voltage in Volts
+                'S_I_A': df.iloc[:, 4],    # Column 5 (0-indexed) - source current in Amperes
+                'S_V_V': df.iloc[:, 5]     # Column 6 (0-indexed) - source voltage in Volts
+            })
+            
+            # Remove the header row if it contains text
+            iv3T_df = iv3T_df[pd.to_numeric(iv3T_df['D_I_A'], errors='coerce').notna()]
+            
+            # Convert to numeric
+            for col in iv3T_df.columns:
+                iv3T_df[col] = pd.to_numeric(iv3T_df[col], errors='coerce')
+            
+            # Calculate channel resistance R = V/I (avoiding division by zero)
+            iv3T_df['D_R_Ohm'] = iv3T_df['D_V_V'] / iv3T_df['D_I_A']
+            iv3T_df['D_R_Ohm'] = iv3T_df['D_R_Ohm'].replace([np.inf, -np.inf], np.nan)
+            
+            # Calculate gate resistance Rg = Vg/Ig (avoiding division by zero)
+            iv3T_df['G_R_Ohm'] = iv3T_df['G_V_V'] / iv3T_df['G_I_A']
+            iv3T_df['G_R_Ohm'] = iv3T_df['G_R_Ohm'].replace([np.inf, -np.inf], np.nan)
+            
+            # Store the data
+            self.iv3T_data.append(iv3T_df)
+            self.iv3T_run_nums.append(run_num)
+            self.iv3T_file_names.append(str(file_path))
+            # Clean up plot string to avoid LaTeX issues
+            clean_name = self._clean_plot_string(file_path.stem)
+            self.iv3T_plot_strings.append(f"Run{run_num}" if run_num is not None else clean_name)
+            
+        except Exception as e:
+            print(f"Error processing IV3T file {file_path.name}: {e}")
 
     def _clean_plot_string(self, text: str) -> str:
         """Clean text string to avoid LaTeX rendering issues"""
@@ -178,6 +228,20 @@ class SMU:
                 selected_strings.append(self.iv_plot_strings[i])
         
         return selected_data, selected_strings
+    
+    def get_iv3T_data(self, run_nums: Optional[list] = None) -> tuple:
+        '''Get IV3T data for specified run numbers or all if none specified'''
+        if run_nums is None:
+            return self.iv3T_data, self.iv3T_plot_strings
+        
+        selected_data = []
+        selected_strings = []
+        for i, run_num in enumerate(self.iv3T_run_nums):
+            if run_num in run_nums:
+                selected_data.append(self.iv3T_data[i])
+                selected_strings.append(self.iv3T_plot_strings[i])
+        
+        return selected_data, selected_strings
 
     def __repr__(self):
-        return f"SMU(folder_path='{self.folder_path}', CV_files={len(self.cv_data)}, IV_files={len(self.iv_data)})"
+        return f"SMU(folder_path='{self.folder_path}', CV_files={len(self.cv_data)}, IV_files={len(self.iv_data)}, IV3T_files={len(self.iv3T_data)})"

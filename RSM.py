@@ -66,7 +66,7 @@ class RSM:
         for i, fi in enumerate(files):
             # Load the data from the file
             try:
-                with open(fi, 'r') as file_check:
+                with open(fi, 'r', encoding='latin1') as file_check:
                     # Read lines until we find the header line
                     header_line = None
                     for line_number, line in enumerate(file_check):
@@ -88,7 +88,7 @@ class RSM:
                         continue
                 
                 # Read the data starting from the header line
-                df = pd.read_csv(fi, sep=',', skiprows=header_line, header=0)
+                df = pd.read_csv(fi, sep=',', skiprows=header_line, header=0, encoding='latin1')
                 
             except Exception as e:
                 print(f"Error with file: {fi}, {e}")
@@ -182,6 +182,21 @@ class RSM:
             twotheta_unique = np.unique(ttw[:,0]).shape[0]
             omega_unique = np.unique(ttw[:,1]).shape[0]
             print("2Theta unique values:", twotheta_unique, "Omega unique values:", omega_unique)
+            
+            expected_points = omega_unique * self.points_per_scan
+            actual_points = ttw.shape[0]
+            
+            if actual_points != expected_points:
+                print(f"Warning: Scan may be incomplete. Actual points {actual_points} != expected {expected_points}. Truncating to the last complete scan.")
+                complete_omegas = actual_points // self.points_per_scan
+                valid_points = complete_omegas * self.points_per_scan
+                
+                ttw = ttw[:valid_points, :]
+                self.qxqz_np[count] = self.qxqz_np[count][:valid_points, :]
+                self.lat_param_np[count] = self.lat_param_np[count][:valid_points, :]
+                
+                omega_unique = complete_omegas
+                twotheta_unique = self.points_per_scan
             
             # Check if the number of unique 2Theta values matches the number of points per scan extracted from the file header
             if twotheta_unique != self.points_per_scan:
