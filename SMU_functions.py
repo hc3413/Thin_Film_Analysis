@@ -4,6 +4,18 @@ from scipy.signal import medfilt, savgol_filter
 from scipy.ndimage import uniform_filter1d
 
 
+def _get_smu_run_nums(run_nums, index):
+    if run_nums is None:
+        return None
+    # Check if run_nums is a list/tuple of lists/tuples/np.ndarray
+    if len(run_nums) > 0 and isinstance(run_nums[0], (list, tuple, np.ndarray)):
+        if index < len(run_nums):
+            return run_nums[index]
+        else:
+            return [] # No run numbers for this SMU object
+    return run_nums
+
+
 def smooth_smu_data(smu_obj, columns=('D_I_A',), method='savgol',
                     window=11, polyorder=2):
     """
@@ -318,6 +330,10 @@ def plot_IV(smu_data: list,
         Standard I vs V plot.
         I(V) = V / R  (Ohmic conduction)
         Useful for basic characterisation and identifying linear/ohmic regions.
+
+    'log':
+        Plots log10|I| vs V.
+        Useful for viewing overall leakage currents across a wide dynamic range.
     
     'SCLC' (Space-Charge Limited Current):
         Plots log10|I| vs log10|V|.
@@ -374,7 +390,7 @@ def plot_IV(smu_data: list,
         y_lim             : Optional tuple specifying the y-axis limits (min, max)
                             in transformed coordinates.
         plot_mode         : Conduction mechanism analysis mode. One of:
-                            'linear', 'SCLC', 'schottky', 'PF', 'FN', 'TAT'.
+                            'linear', 'log', 'SCLC', 'schottky', 'PF', 'FN', 'TAT'.
                             Default is 'linear'.
         plot_arrows       : Whether to add directional arrows showing sweep direction.
         line_width        : Optional line width for the plot. If None, uses default.
@@ -404,7 +420,7 @@ def plot_IV(smu_data: list,
           - Nearest-neighbour hopping: ln(sigma) vs 1/T
     """
     
-    valid_modes = {'linear', 'SCLC', 'schottky', 'PF', 'FN', 'TAT'}
+    valid_modes = {'linear', 'log', 'SCLC', 'schottky', 'PF', 'FN', 'TAT'}
     if plot_mode not in valid_modes:
         raise ValueError(f"plot_mode must be one of {valid_modes}, got '{plot_mode}'")
     
@@ -421,8 +437,9 @@ def plot_IV(smu_data: list,
     current_scale = 1
     if plot_mode == 'linear':
         all_current_data = []
-        for smu_obj in smu_data:
-            iv_data, plot_strings = smu_obj.get_iv_data(run_nums)
+        for idx, smu_obj in enumerate(smu_data):
+            current_run_nums = _get_smu_run_nums(run_nums, idx)
+            iv_data, plot_strings = smu_obj.get_iv_data(current_run_nums)
             for df, label_str in zip(iv_data, plot_strings):
                 if not df.empty:
                     current_data = df['I_A']
@@ -435,8 +452,9 @@ def plot_IV(smu_data: list,
             _, current_unit, current_scale = auto_scale_current(np.array(all_current_data))
     
     # Now plot with the determined scaling
-    for smu_obj in smu_data:
-        iv_data, plot_strings = smu_obj.get_iv_data(run_nums)
+    for idx, smu_obj in enumerate(smu_data):
+        current_run_nums = _get_smu_run_nums(run_nums, idx)
+        iv_data, plot_strings = smu_obj.get_iv_data(current_run_nums)
         
         for df, label_str in zip(iv_data, plot_strings):
             if not df.empty:
@@ -455,6 +473,10 @@ def plot_IV(smu_data: list,
                 if plot_mode == 'linear':
                     x = x_raw
                     y = y_raw * current_scale
+                elif plot_mode == 'log':
+                    valid = np.abs(y_raw) > 0
+                    x = x_raw[valid]
+                    y = np.abs(y_raw[valid])
                 elif plot_mode == 'SCLC':
                     valid = (np.abs(x_raw) > 0) & (np.abs(y_raw) > 0)
                     x = np.log10(np.abs(x_raw[valid]))
@@ -559,6 +581,11 @@ def plot_IV(smu_data: list,
         ax.set_xlabel(r"Voltage (V)")
         ax.set_ylabel(rf"Current ({current_unit})")
         ax.set_title(r"I-V Characteristics")
+    elif plot_mode == 'log':
+        ax.set_xlabel(r"Voltage (V)")
+        ax.set_ylabel(r"Current (A)")
+        ax.set_title(r"I-V Characteristics")
+        ax.set_yscale('log')
     elif plot_mode == 'SCLC':
         ax.set_xlabel(r"$\log_{10}|V|$")
         ax.set_ylabel(r"$\log_{10}|I|$")
@@ -650,8 +677,9 @@ def plot_CV(smu_data: list,
     
     fig, ax = plt.subplots(figsize=fig_size)
     
-    for smu_obj in smu_data:
-        cv_data, plot_strings = smu_obj.get_cv_data(run_nums)
+    for idx, smu_obj in enumerate(smu_data):
+        current_run_nums = _get_smu_run_nums(run_nums, idx)
+        cv_data, plot_strings = smu_obj.get_cv_data(current_run_nums)
         
         for df, label_str in zip(cv_data, plot_strings):
             if not df.empty:
@@ -775,8 +803,9 @@ def plot_resistance(smu_data: list,
     
     # Collect all resistance data to determine appropriate scaling
     all_resistance_data = []
-    for smu_obj in smu_data:
-        iv_data, plot_strings = smu_obj.get_iv_data(run_nums)
+    for idx, smu_obj in enumerate(smu_data):
+        current_run_nums = _get_smu_run_nums(run_nums, idx)
+        iv_data, plot_strings = smu_obj.get_iv_data(current_run_nums)
         for df, label_str in zip(iv_data, plot_strings):
             if not df.empty:
                 resistance_data = df['R_Ohm']
@@ -798,8 +827,9 @@ def plot_resistance(smu_data: list,
         resistance_scale = 1
     
     # Now plot with the determined scaling
-    for smu_obj in smu_data:
-        iv_data, plot_strings = smu_obj.get_iv_data(run_nums)
+    for idx, smu_obj in enumerate(smu_data):
+        current_run_nums = _get_smu_run_nums(run_nums, idx)
+        iv_data, plot_strings = smu_obj.get_iv_data(current_run_nums)
         
         for df, label_str in zip(iv_data, plot_strings):
             if not df.empty:
@@ -949,7 +979,7 @@ _TERMINAL_X_LABELS = {
 def plot_IV_3T(smu_data: list,
                run_nums: Optional[list] = None,
                x_terminal: str = 'gate',
-               terminal_display: Optional[list] = None,
+               terminal_display: Optional[list] = None, #'gate', 'drain', or 'source'
                plot_mode: str = 'linear',
                x_lim: Optional[Tuple[float, float]] = None,
                y_lim: Optional[Tuple[float, float]] = None,
@@ -1037,10 +1067,11 @@ def plot_IV_3T(smu_data: list,
     # ---- auto-scale current for linear / log / transconductance / sqrt_Id ---
     current_unit = "A"
     current_scale = 1
-    if plot_mode in ('linear', 'log', 'sqrt_Id'):
+    if plot_mode in ('linear', 'sqrt_Id'):
         all_current = []
-        for smu_obj in smu_data:
-            data_list, _ = smu_obj.get_iv3T_data(run_nums)
+        for idx, smu_obj in enumerate(smu_data):
+            current_run_nums = _get_smu_run_nums(run_nums, idx)
+            data_list, _ = smu_obj.get_iv3T_data(current_run_nums)
             for df in data_list:
                 if df.empty:
                     continue
@@ -1056,8 +1087,9 @@ def plot_IV_3T(smu_data: list,
             _, current_unit, current_scale = auto_scale_current(np.array(all_current))
 
     # ---- main plotting loop -------------------------------------------------
-    for smu_obj in smu_data:
-        data_list, plot_strings = smu_obj.get_iv3T_data(run_nums)
+    for idx, smu_obj in enumerate(smu_data):
+        current_run_nums = _get_smu_run_nums(run_nums, idx)
+        data_list, plot_strings = smu_obj.get_iv3T_data(current_run_nums)
 
         for df, run_label in zip(data_list, plot_strings):
             if df.empty:
@@ -1087,7 +1119,7 @@ def plot_IV_3T(smu_data: list,
                 elif plot_mode == 'log':
                     valid = np.abs(yr) > 0
                     x = xr[valid]
-                    y = np.abs(yr[valid]) * current_scale
+                    y = np.abs(yr[valid])
                 elif plot_mode == 'SCLC':
                     valid = (np.abs(xr) > 0) & (np.abs(yr) > 0)
                     x = np.log10(np.abs(xr[valid]))
@@ -1183,9 +1215,9 @@ def plot_IV_3T(smu_data: list,
         ax.set_title(r"FET Transfer Characteristics")
     elif plot_mode == 'log':
         ax.set_xlabel(x_label_base)
-        ax.set_ylabel(rf"$|I|$ ({current_unit})")
+        ax.set_ylabel(r"Current $I$ (A)")
         ax.set_yscale('log')
-        ax.set_title(r"FET Transfer Characteristics (log scale)")
+        ax.set_title(r"FET Transfer Characteristics")
     elif plot_mode == 'SCLC':
         ax.set_xlabel(r"$\log_{10}|V|$")
         ax.set_ylabel(r"$\log_{10}|I|$")
@@ -1269,8 +1301,9 @@ def plot_resistance_3T(smu_data: list,
 
     # Collect all resistance data for auto-scaling
     all_res = []
-    for smu_obj in smu_data:
-        data_list, _ = smu_obj.get_iv3T_data(run_nums)
+    for idx, smu_obj in enumerate(smu_data):
+        current_run_nums = _get_smu_run_nums(run_nums, idx)
+        data_list, _ = smu_obj.get_iv3T_data(current_run_nums)
         for df in data_list:
             if df.empty:
                 continue
@@ -1293,8 +1326,9 @@ def plot_resistance_3T(smu_data: list,
     else:
         res_unit, res_scale = "Ω", 1
 
-    for smu_obj in smu_data:
-        data_list, plot_strings = smu_obj.get_iv3T_data(run_nums)
+    for idx, smu_obj in enumerate(smu_data):
+        current_run_nums = _get_smu_run_nums(run_nums, idx)
+        data_list, plot_strings = smu_obj.get_iv3T_data(current_run_nums)
         for df, run_label in zip(data_list, plot_strings):
             if df.empty:
                 continue

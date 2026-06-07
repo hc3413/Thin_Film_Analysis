@@ -62,9 +62,9 @@ class SMU:
                     print(f"Warning: Could not extract run number from {fi.name}")
                 
                 # Check file type and process accordingly
-                if 'cv-cap' in fi.name.lower():
+                if 'cv-cap' in fi.name.lower() :
                     self._process_cv_file(fi, run_num)
-                elif 'res2t' in fi.name.lower():
+                elif 'res2t' in fi.name.lower() or 'iv_sweep' in fi.name.lower():
                     self._process_iv_file(fi, run_num)
                 elif 'fet' in fi.name.lower() or 'id_vs_vg' in fi.name.lower():
                     self._process_iv3T_file(fi, run_num)
