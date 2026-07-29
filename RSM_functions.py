@@ -29,7 +29,8 @@ def _plot_on_ax(
     denoise_size: Optional[int] = None, # Remove connected components smaller than this many pixels
     bulk_params: Union[bool, List[str]] = False, # List of material keys to show bulk positions, or False for none
     norm_plot: bool = False, # Normalise intensity to STO-like peak (robust top-N mean)
-    alpha: float = 1.0, # Alpha mapping transparency parameter
+    alpha: float = 1.0, # Alpha transparency parameter
+    gradient_alpha: bool = False, # If True, scales alpha from 0 to 'alpha' across the colormap
 ) -> Tuple[Optional[list], Optional[list]]:
     """
     A helper function to plot a single dataset on the provided axis.
@@ -254,12 +255,15 @@ def _plot_on_ax(
         
     _cmap_colors = _base_cmap(np.linspace(0, 1, 256))
     
-    # Scale alpha up from 0 to global 'alpha' across the film intensity range,
-    # and cap it at 'alpha' for higher intensities (e.g. the STO peak)
-    alpha_array = np.zeros(256)
-    alpha_array[:_alpha_max_index] = np.linspace(0, alpha, _alpha_max_index)
-    alpha_array[_alpha_max_index:] = alpha
-    _cmap_colors[:, -1] = alpha_array
+    if gradient_alpha:
+        # Scale alpha up from 0 to global 'alpha' across the film intensity range,
+        # and cap it at 'alpha' for higher intensities (e.g. the STO peak)
+        alpha_array = np.zeros(256)
+        alpha_array[:_alpha_max_index] = np.linspace(0, alpha, _alpha_max_index)
+        alpha_array[_alpha_max_index:] = alpha
+        _cmap_colors[:, -1] = alpha_array
+    else:
+        _cmap_colors[:, -1] = alpha
     
     plot_cmap_alpha = ListedColormap(_cmap_colors)
 
@@ -440,6 +444,7 @@ def RSM_plot_sep(
     norm_plot: bool = False, # Normalise each map to its STO-like peak (robust top-5 mean)
     denoise_size: Optional[int] = None, # Remove connected noise spots smaller than this many pixels
     bulk_params: Union[bool, List[str]] = False, # List of material keys e.g. ['BSO', 'SSO'] or False
+    alpha: float = 1.0,
 ) -> Figure:
     """
     Plot multiple datasets in separate subplots.
@@ -486,7 +491,8 @@ def RSM_plot_sep(
                         plot_type = plot_type, ax_unit = ax_unit, colormap= custom_cmap , label_str=label_str,
                         x_lim=x_lim, y_lim=y_lim, resolution_scaling=resolution_scaling, first_index=first_index,
                         show_key=show_key, intensity_lim=intensity_lim, show_title=title_on, show_colorbar=color_bar,
-                        denoise_size=denoise_size, bulk_params=bulk_params, norm_plot=norm_plot)
+                        denoise_size=denoise_size, bulk_params=bulk_params, norm_plot=norm_plot,
+                        alpha=alpha, gradient_alpha=False)
             subplot_counter += 1
             first_index = False
             
@@ -515,6 +521,7 @@ def RSM_plot_single(
     fitted_peaks: Optional[pd.DataFrame] = None,
     denoise_size: Optional[int] = None,
     bulk_params: Union[bool, List[str]] = False, # List of material keys e.g. ['BSO', 'SSO'] or False
+    alpha: float = 1.0,
 ) -> Figure:
     """
     Plot a single RSM dataset with consistent figure styling.
@@ -566,7 +573,7 @@ def RSM_plot_single(
                 x_lim=x_lim, y_lim=y_lim, resolution_scaling=resolution_scaling, first_index=True,
                 show_key=show_key, intensity_lim=intensity_lim, show_title=title_on, show_colorbar=color_bar,
                 fitted_peaks=fitted_peaks, denoise_size=denoise_size, bulk_params=bulk_params,
-                norm_plot=norm_plot)
+                norm_plot=norm_plot, alpha=alpha, gradient_alpha=False)
     
     fig.tight_layout()
     plt.show()
@@ -588,6 +595,7 @@ def RSM_plot_fitting(
     residuals: bool = False,
     denoise_size: Optional[int] = None,
     bulk_params: Union[bool, List[str]] = False,
+    alpha: float = 1.0,
 ) -> Figure:
     """
     Display RSM data alongside fitted simulation for visual validation.
@@ -654,7 +662,7 @@ def RSM_plot_fitting(
                 first_index=False, show_key=False, intensity_lim=intensity_lim,
                 show_title=False, show_colorbar=False,
                 fitted_peaks=None, denoise_size=denoise_size,
-                bulk_params=bulk_params)
+                bulk_params=bulk_params, alpha=alpha, gradient_alpha=False)
     ax_data.set_title('Measured', fontsize=9)
 
     # --- Overlay fitted peak markers on left panel ---
@@ -925,7 +933,7 @@ def RSM_plot_same(
                         grid_filt = grid_filt,
                         plot_type = plot_type, ax_unit = ax_unit, colormap=cmap, label_str=label_str,
                         x_lim=x_lim, y_lim=y_lim, contour_color=True, show_colorbar=color_bar, first_index=first_index, resolution_scaling=resolution_scaling,
-                        intensity_lim=intensity_lim, norm_plot=norm_plot, alpha=alpha,
+                        intensity_lim=intensity_lim, norm_plot=norm_plot, alpha=alpha, gradient_alpha=True,
                         show_key=show_key, show_title=title_on, denoise_size=denoise_size,
                         bulk_params=bulk_params)
             col_counter += 1

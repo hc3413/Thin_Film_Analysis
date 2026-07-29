@@ -15,6 +15,16 @@ def _get_smu_run_nums(run_nums, index):
             return [] # No run numbers for this SMU object
     return run_nums
 
+def _get_smu_run_labels(run_labels, index, original_labels):
+    if run_labels is None:
+        return original_labels
+    if len(run_labels) > 0 and isinstance(run_labels[0], (list, tuple, np.ndarray)):
+        if index < len(run_labels):
+            return run_labels[index]
+        else:
+            return original_labels
+    return run_labels
+
 
 def smooth_smu_data(smu_obj, columns=('D_I_A',), method='savgol',
                     window=11, polyorder=2):
@@ -978,9 +988,11 @@ _TERMINAL_X_LABELS = {
 
 def plot_IV_3T(smu_data: list,
                run_nums: Optional[list] = None,
+               run_labels: Optional[list] = None,
                x_terminal: str = 'gate',
                terminal_display: Optional[list] = None, #'gate', 'drain', or 'source'
                plot_mode: str = 'linear',
+               norm_current: bool = False,
                x_lim: Optional[Tuple[float, float]] = None,
                y_lim: Optional[Tuple[float, float]] = None,
                plot_arrows: bool = False,
@@ -1067,7 +1079,7 @@ def plot_IV_3T(smu_data: list,
     # ---- auto-scale current for linear / log / transconductance / sqrt_Id ---
     current_unit = "A"
     current_scale = 1
-    if plot_mode in ('linear', 'sqrt_Id'):
+    if plot_mode in ('linear', 'sqrt_Id') and not norm_current:
         all_current = []
         for idx, smu_obj in enumerate(smu_data):
             current_run_nums = _get_smu_run_nums(run_nums, idx)
@@ -1076,6 +1088,8 @@ def plot_IV_3T(smu_data: list,
                 if df.empty:
                     continue
                 for term in terminal_display:
+                    if norm_current and term in ('drain', 'source'):
+                        continue
                     i_col = _TERMINAL_MAP[term]['I']
                     c = df[i_col]
                     if x_lim is not None:
@@ -1089,7 +1103,12 @@ def plot_IV_3T(smu_data: list,
     # ---- main plotting loop -------------------------------------------------
     for idx, smu_obj in enumerate(smu_data):
         current_run_nums = _get_smu_run_nums(run_nums, idx)
-        data_list, plot_strings = smu_obj.get_iv3T_data(current_run_nums)
+        
+        # Override run labels if provided
+        current_run_labels = _get_smu_run_labels(run_labels, idx, None)
+
+        data_list, default_plot_strings = smu_obj.get_iv3T_data(current_run_nums)
+        plot_strings = current_run_labels if current_run_labels is not None else default_plot_strings
 
         for df, run_label in zip(data_list, plot_strings):
             if df.empty:
@@ -1101,6 +1120,14 @@ def plot_IV_3T(smu_data: list,
                 info = _TERMINAL_MAP[term]
                 i_col = info['I']
                 y_current_raw = df[i_col].copy()
+
+                if norm_current and term in ('drain', 'source'):
+                    # Find current closest to Vg=0. Usually the first point in fresh data, 
+                    # but closest to 0 is safer.
+                    first_idx = np.argmin(np.abs(x_voltage_raw.values))
+                    i_norm = y_current_raw.iloc[first_idx] if hasattr(y_current_raw, 'iloc') else y_current_raw.values[first_idx]
+                    if abs(i_norm) > 1e-15:
+                        y_current_raw = y_current_raw / i_norm
 
                 # ---- x_lim masking on raw voltage ----
                 xr = x_voltage_raw.copy()
@@ -1115,7 +1142,9 @@ def plot_IV_3T(smu_data: list,
                 # ---- transform data per plot_mode ----
                 if plot_mode == 'linear':
                     x = xr
-                    y = yr * current_scale
+                    # if normalized, we don't scale it. if gate, it uses current_scale
+                    y_scale = 1 if (norm_current and term in ('drain', 'source')) else current_scale
+                    y = yr * y_scale
                 elif plot_mode == 'log':
                     valid = np.abs(yr) > 0
                     x = xr[valid]
@@ -1209,13 +1238,16 @@ def plot_IV_3T(smu_data: list,
     # ---- axis labels & title ------------------------------------------------
     x_label_base = _TERMINAL_X_LABELS[x_terminal]
 
+    y_label_current = r"$I/I_{V_G=0}$" if norm_current else rf"Current ({current_unit})"
+    y_label_log = r"$I/I_{V_G=0}$" if norm_current else r"Current $I$ (A)"
+
     if plot_mode == 'linear':
         ax.set_xlabel(x_label_base)
-        ax.set_ylabel(rf"Current ({current_unit})")
+        ax.set_ylabel(y_label_current)
         ax.set_title(r"FET Transfer Characteristics")
     elif plot_mode == 'log':
         ax.set_xlabel(x_label_base)
-        ax.set_ylabel(r"Current $I$ (A)")
+        ax.set_ylabel(y_label_log)
         ax.set_yscale('log')
         ax.set_title(r"FET Transfer Characteristics")
     elif plot_mode == 'SCLC':
