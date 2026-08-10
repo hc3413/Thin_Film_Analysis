@@ -32,6 +32,9 @@ class SMU:
         self.iv_plot_strings: list = []
         self.iv3T_plot_strings: list = []
         
+        # Counter for auto-assigning run numbers to files without Run<N> in the name
+        self._auto_run_counter: int = 0
+        
         # Load the data as you initialize the class
         self._load_data()
 
@@ -58,8 +61,7 @@ class SMU:
                 if run_match:
                     run_num = int(run_match.group(1))
                 else:
-                    run_num = None
-                    print(f"Warning: Could not extract run number from {fi.name}")
+                    run_num = None  # Will be auto-assigned in the processor
                 
                 # Check file type and process accordingly
                 if 'cv-cap' in fi.name.lower() :
@@ -68,6 +70,10 @@ class SMU:
                     self._process_iv_file(fi, run_num)
                 elif 'fet' in fi.name.lower() or 'id_vs_vg' in fi.name.lower():
                     self._process_iv3T_file(fi, run_num)
+                elif 'pund' in fi.name.lower() or 'customwaveform' in fi.name.lower():
+                    # Pulsed / ferroelectric measurements live in PMU.py
+                    print(f"Skipping {fi.name}: pulsed measurement, import it "
+                          f"with PMU.Keithley_PUND or PMU.Keithley_Custom")
                 else:
                     print(f"Warning: Unknown file type for {fi.name}")
                     
@@ -78,34 +84,69 @@ class SMU:
         print(f"Loaded {len(self.cv_data)} CV, {len(self.iv_data)} IV, {len(self.iv3T_data)} IV3T files")
 
     def _process_cv_file(self, file_path: Path, run_num: Optional[int]) -> None:
-        '''Process CV (capacitance-voltage) files'''
+        '''Process CV (capacitance-voltage) files.
+        
+        Handles both single-sheet files (e.g. DR012 with a 'Data' sheet) and 
+        multi-sheet files (e.g. MFS097 with separate sheets per frequency like 
+        '1kHz_-2V to +2V' and '100kHz_-2V to +2V'). Data sheets are identified 
+        by the presence of a 'Cp_AB' column; other sheets (e.g. 'Settings') are 
+        skipped automatically.
+        '''
         try:
-            # Read the Excel file
-            df = pd.read_excel(file_path, header=0)  # Use first row as header
+            # Inspect all sheets to find which ones contain CV data
+            xls = pd.ExcelFile(file_path)
+            data_sheets = []
+            for sheet_name in xls.sheet_names:
+                df_peek = pd.read_excel(xls, sheet_name=sheet_name, header=0, nrows=1)
+                if 'Cp_AB' in df_peek.columns:
+                    data_sheets.append(sheet_name)
             
-            # Extract the required columns based on the specification
-            # Column 1 = Cp, Column 2 = Gp, Column 4 = V_DC, Column 5 = frequency
-            cv_df = pd.DataFrame({
-                'Cp': df.iloc[:, 0],          # Column 1 (0-indexed)
-                'Gp': df.iloc[:, 1],          # Column 2 (0-indexed)  
-                'V_DC': df.iloc[:, 2],        # Column 3 (0-indexed) - this is DCV_AB
-                'Frequency_Hz': df.iloc[:, 3] # Column 4 (0-indexed) - this is F_AB
-            })
+            if not data_sheets:
+                print(f"Warning: No data sheets with 'Cp_AB' column found in {file_path.name}")
+                return
             
-            # Remove the header row if it contains text
-            cv_df = cv_df[pd.to_numeric(cv_df['Cp'], errors='coerce').notna()]
-            
-            # Convert to numeric
-            for col in cv_df.columns:
-                cv_df[col] = pd.to_numeric(cv_df[col], errors='coerce')
-            
-            # Store the data
-            self.cv_data.append(cv_df)
-            self.cv_run_nums.append(run_num)
-            self.cv_file_names.append(str(file_path))
-            # Clean up plot string to avoid LaTeX issues
-            clean_name = self._clean_plot_string(file_path.stem)
-            self.cv_plot_strings.append(f"Run{run_num}" if run_num is not None else clean_name)
+            for sheet_name in data_sheets:
+                df = pd.read_excel(xls, sheet_name=sheet_name, header=0)
+                
+                # Extract the required columns based on the specification
+                # Column 1 = Cp, Column 2 = Gp, Column 3 = V_DC, Column 4 = frequency
+                cv_df = pd.DataFrame({
+                    'Cp': df.iloc[:, 0],          # Column 1 (0-indexed)
+                    'Gp': df.iloc[:, 1],          # Column 2 (0-indexed)  
+                    'V_DC': df.iloc[:, 2],        # Column 3 (0-indexed) - this is DCV_AB
+                    'Frequency_Hz': df.iloc[:, 3] # Column 4 (0-indexed) - this is F_AB
+                })
+                
+                # Remove the header row if it contains text
+                cv_df = cv_df[pd.to_numeric(cv_df['Cp'], errors='coerce').notna()]
+                
+                # Convert to numeric
+                for col in cv_df.columns:
+                    cv_df[col] = pd.to_numeric(cv_df[col], errors='coerce')
+                
+                # Auto-assign a run number if the filename didn't contain one
+                effective_run_num = run_num
+                if effective_run_num is None:
+                    effective_run_num = self._auto_run_counter
+                    self._auto_run_counter += 1
+                
+                # Store the data
+                self.cv_data.append(cv_df)
+                self.cv_run_nums.append(effective_run_num)
+                self.cv_file_names.append(str(file_path))
+                
+                # Build a descriptive plot label
+                clean_name = self._clean_plot_string(file_path.stem)
+                if len(data_sheets) > 1:
+                    # Multi-sheet file: use sheet name as the label (e.g. "1kHz -2V to +2V")
+                    clean_sheet = self._clean_plot_string(sheet_name)
+                    self.cv_plot_strings.append(clean_sheet)
+                    print(f"  CV auto-assigned run {effective_run_num} → {file_path.name} [{sheet_name}]")
+                else:
+                    # Single data sheet: use run number or file name as before
+                    self.cv_plot_strings.append(f"Run{effective_run_num}" if run_num is not None else clean_name)
+                    if run_num is None:
+                        print(f"  CV auto-assigned run {effective_run_num} → {file_path.name}")
             
         except Exception as e:
             print(f"Error processing CV file {file_path.name}: {e}")
@@ -135,12 +176,19 @@ class SMU:
             iv_df['R_Ohm'] = iv_df['R_Ohm'].replace([np.inf, -np.inf], np.nan)
             
             # Store the data
+            # Auto-assign a run number if the filename didn't contain one
+            effective_run_num = run_num
+            if effective_run_num is None:
+                effective_run_num = self._auto_run_counter
+                self._auto_run_counter += 1
+                print(f"  IV auto-assigned run {effective_run_num} → {file_path.name}")
+            
             self.iv_data.append(iv_df)
-            self.iv_run_nums.append(run_num)
+            self.iv_run_nums.append(effective_run_num)
             self.iv_file_names.append(str(file_path))
             # Clean up plot string to avoid LaTeX issues
             clean_name = self._clean_plot_string(file_path.stem)
-            self.iv_plot_strings.append(f"Run{run_num}" if run_num is not None else clean_name)
+            self.iv_plot_strings.append(f"Run{effective_run_num}" if run_num is not None else clean_name)
             
         except Exception as e:
             print(f"Error processing IV file {file_path.name}: {e}")
@@ -179,12 +227,19 @@ class SMU:
             iv3T_df['G_R_Ohm'] = iv3T_df['G_R_Ohm'].replace([np.inf, -np.inf], np.nan)
             
             # Store the data
+            # Auto-assign a run number if the filename didn't contain one
+            effective_run_num = run_num
+            if effective_run_num is None:
+                effective_run_num = self._auto_run_counter
+                self._auto_run_counter += 1
+                print(f"  IV3T auto-assigned run {effective_run_num} → {file_path.name}")
+            
             self.iv3T_data.append(iv3T_df)
-            self.iv3T_run_nums.append(run_num)
+            self.iv3T_run_nums.append(effective_run_num)
             self.iv3T_file_names.append(str(file_path))
             # Clean up plot string to avoid LaTeX issues
             clean_name = self._clean_plot_string(file_path.stem)
-            self.iv3T_plot_strings.append(f"Run{run_num}" if run_num is not None else clean_name)
+            self.iv3T_plot_strings.append(f"Run{effective_run_num}" if run_num is not None else clean_name)
             
         except Exception as e:
             print(f"Error processing IV3T file {file_path.name}: {e}")

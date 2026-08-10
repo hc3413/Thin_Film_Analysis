@@ -238,9 +238,16 @@ def ttw_plot_sep(
         The matplotlib Figure object containing the subplots.
     """
 
+    from plot_style import apply_plot_style
+
     total_plots = sum(len(class_obj.ttw_df) for class_obj in dat)
     n_rows = total_plots // 2 + total_plots % 2
 
+    # Apply the project style (fonts, ticks, colour cycle, LaTeX) but keep the
+    # figure size fixed: this is a multi-panel comparison grid whose 15 x 5.5
+    # per-row geometry is chosen for readability, not derived from the
+    # single-plot figure size.
+    apply_plot_style()
     fig = plt.figure(figsize=(15, 5.5 * n_rows))
     gs = fig.add_gridspec(n_rows, 2)
     
@@ -306,8 +313,13 @@ def ttw_plot_same(
     Returns:
         The matplotlib Figure object containing the plot.
     """
+    from plot_style import apply_plot_style
+
+    # Single-axes plot, so it takes the project figure size like the SMU and PMU
+    # plots do - inherited from the style rather than passed explicitly.
+    apply_plot_style()
     fig, ax = plt.subplots()
-    
+
     plot_counter = 0  # Track which plot we're on for offsetting
     
     for class_obj in dat:

@@ -329,7 +329,9 @@ def plot_IV(smu_data: list,
            output_SMU: Optional[str] = None,
            fig_name: Optional[str] = None,
            fig_format: str = 'tiff',
-           plot_transparency: bool = False) -> Figure:
+           plot_title: Optional[str] = None,
+           plot_transparency: bool = True,
+           show: bool = True) -> Figure:
     """
     Plot I-V characteristics with different conduction mechanism analysis modes.
     
@@ -435,10 +437,10 @@ def plot_IV(smu_data: list,
         raise ValueError(f"plot_mode must be one of {valid_modes}, got '{plot_mode}'")
     
     # Import here to avoid circular imports
-    from plot_style import set_plot_style
+    from plot_style import apply_plot_style
     
     # Set plot style based on export_data
-    fig_size = set_plot_style(export_data=export_data, use_tex=True)
+    fig_size = apply_plot_style(export_data=export_data)
     
     fig, ax = plt.subplots(figsize=fig_size)
     
@@ -630,10 +632,17 @@ def plot_IV(smu_data: list,
         output_dir.mkdir(exist_ok=True)
         fname = f"{fig_name}_IV_{plot_mode}.{fig_format}" if fig_name else f"IV_{plot_mode}.{fig_format}"
         output_file = str(output_dir / fname)
-        fig.savefig(output_file, dpi=300, bbox_inches='tight', 
+        fig.savefig(output_file, dpi=600, bbox_inches='tight', 
                    transparent=plot_transparency, format=fig_format)
     
-    plt.show()
+    # Titles off unless one is asked for - a figure caption carries
+    # the description in a paper.
+    ax.set_title(plot_title if plot_title else '')
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
     return fig
 
 
@@ -652,7 +661,9 @@ def plot_CV(smu_data: list,
            output_SMU: Optional[str] = None,
            fig_name: Optional[str] = None,
            fig_format: str = 'tiff',
-           plot_transparency: bool = False) -> Figure:
+           plot_title: Optional[str] = None,
+           plot_transparency: bool = True,
+           show: bool = True) -> Figure:
     """
     Plot C-V (capacitance-voltage) characteristics from SMU data.
     
@@ -680,10 +691,10 @@ def plot_CV(smu_data: list,
     """
     
     # Import here to avoid circular imports
-    from plot_style import set_plot_style
+    from plot_style import apply_plot_style
     
     # Set plot style based on export_data
-    fig_size = set_plot_style(export_data=export_data, use_tex=True)
+    fig_size = apply_plot_style(export_data=export_data)
     
     fig, ax = plt.subplots(figsize=fig_size)
     
@@ -756,11 +767,199 @@ def plot_CV(smu_data: list,
         output_dir.mkdir(exist_ok=True)
         fname = f"{fig_name}_CV.{fig_format}" if fig_name else f"CV.{fig_format}"
         output_file = str(output_dir / fname)
-        fig.savefig(output_file, dpi=300, bbox_inches='tight', 
+        fig.savefig(output_file, dpi=600, bbox_inches='tight', 
                    transparent=plot_transparency, format=fig_format)
     
-    plt.show()
+    # Titles off unless one is asked for - a figure caption carries
+    # the description in a paper.
+    ax.set_title(plot_title if plot_title else '')
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
     return fig
+
+
+def plot_permittivity(smu_data: list,
+                      vac_cap: float,
+                      run_nums: Optional[list] = None,
+                      x_lim: Optional[Tuple[float, float]] = None,
+                      y_lim_real: Optional[Tuple[float, float]] = None,
+                      y_lim_imag: Optional[Tuple[float, float]] = None,
+                      log_plot: bool = False,
+                      display_points: bool = False,
+                      line_width: Optional[float] = None,
+                      markersize: Optional[float] = None,
+                      plot_key: bool = True,
+                      export_data: bool = False,
+                      output_SMU: Optional[str] = None,
+                      fig_name: Optional[str] = None,
+                      fig_format: str = 'tiff',
+                      plot_title: Optional[str] = None,
+                      plot_transparency: bool = True,
+                      show: bool = True) -> Tuple[Figure, Figure]:
+    r"""
+    Plot dielectric permittivity derived from C-V / G-V measurements.
+
+    Given a vacuum (geometric) capacitance C_0 = \varepsilon_0 A / d the
+    real and imaginary parts of the relative permittivity are computed as:
+
+        \varepsilon'  = C_p / C_0
+        \varepsilon'' = G_p / (\omega \, C_0)    where  \omega = 2\pi f
+
+    Two separate figures are produced: one for \varepsilon' and one for
+    \varepsilon'', both plotted against the DC bias voltage.
+
+    Parameters
+    ----------
+    smu_data          : list
+        List of SMU objects containing CV data.
+    vac_cap           : float
+        Vacuum capacitance C_0 = eps_0 * A / d  (in Farads).  This is the
+        parallel-plate capacitance *without* the dielectric constant.
+    run_nums          : list, optional
+        Run numbers to plot.  If None, plots all.
+    x_lim             : tuple, optional
+        x-axis (voltage) limits (min, max).
+    y_lim_real        : tuple, optional
+        y-axis limits for the eps' figure.
+    y_lim_imag        : tuple, optional
+        y-axis limits for the eps'' figure.
+    log_plot          : bool
+        Whether to use a logarithmic y-axis.
+    display_points    : bool
+        Whether to show data-point markers.
+    line_width        : float, optional
+        Override line width.
+    markersize        : float, optional
+        Override marker size.
+    plot_key          : bool
+        Whether to show the legend.
+    export_data       : bool
+        Whether to use export styling and save figures.
+    output_SMU        : str, optional
+        Directory path for saving figures when export_data is True.
+    fig_name          : str, optional
+        Optional prefix for saved filenames.
+    fig_format        : str
+        Figure file format ('png', 'svg', 'tiff', …).
+    plot_transparency : bool
+        Whether to save with a transparent background.
+
+    Returns
+    -------
+    (fig_real, fig_imag) : tuple of Figure
+        The two matplotlib Figure objects.
+    """
+    from plot_style import apply_plot_style
+
+    fig_size = apply_plot_style(export_data=export_data)
+
+    fig_real, ax_real = plt.subplots(figsize=fig_size)
+    fig_imag, ax_imag = plt.subplots(figsize=fig_size)
+
+    for idx, smu_obj in enumerate(smu_data):
+        current_run_nums = _get_smu_run_nums(run_nums, idx)
+        cv_data, plot_strings = smu_obj.get_cv_data(current_run_nums)
+
+        for df, label_str in zip(cv_data, plot_strings):
+            if df.empty:
+                continue
+
+            x = df['V_DC']
+
+            # Apply x_lim masking
+            if x_lim is not None:
+                mask = (x >= x_lim[0]) & (x <= x_lim[1])
+                x = x[mask]
+                if len(x) == 0:
+                    continue
+            else:
+                mask = x.notna()
+
+            cp = df['Cp'][mask]
+            gp = df['Gp'][mask]
+            freq = df['Frequency_Hz'][mask]
+
+            # Compute permittivity components
+            eps_real = cp / vac_cap
+            omega = 2.0 * np.pi * freq
+            eps_imag = gp / (omega * vac_cap)
+
+            # --- ε' plot ---
+            kwargs_real = {
+                'label': rf"{label_str}",
+                'marker': 'o' if display_points else '',
+            }
+            if line_width is not None:
+                kwargs_real['linewidth'] = line_width
+            if markersize is not None:
+                kwargs_real['markersize'] = markersize
+            ax_real.plot(x, eps_real, **kwargs_real)
+
+            # --- ε'' plot ---
+            kwargs_imag = {
+                'label': rf"{label_str}",
+                'marker': 'o' if display_points else '',
+            }
+            if line_width is not None:
+                kwargs_imag['linewidth'] = line_width
+            if markersize is not None:
+                kwargs_imag['markersize'] = markersize
+            ax_imag.plot(x, eps_imag, **kwargs_imag)
+
+    # ---- Finalise ε' figure ----
+    ax_real.set_xlabel(r"DC Voltage (V)")
+    ax_real.set_ylabel(r"$\varepsilon'$")
+    ax_real.set_title(r"Real Permittivity ($\varepsilon'$)")
+    if log_plot:
+        ax_real.set_yscale('log')
+    if y_lim_real is not None:
+        ax_real.set_ylim(y_lim_real)
+    if plot_key:
+        ax_real.legend()
+    ax_real.grid(True, alpha=0.3)
+
+    # ---- Finalise ε'' figure ----
+    ax_imag.set_xlabel(r"DC Voltage (V)")
+    ax_imag.set_ylabel(r"$\varepsilon''$")
+    ax_imag.set_title(r"Imaginary Permittivity ($\varepsilon''$)")
+    if log_plot:
+        ax_imag.set_yscale('log')
+    if y_lim_imag is not None:
+        ax_imag.set_ylim(y_lim_imag)
+    if plot_key:
+        ax_imag.legend()
+    ax_imag.grid(True, alpha=0.3)
+
+    # ---- Export ----
+    if export_data and output_SMU is not None:
+        from pathlib import Path
+        output_dir = Path(output_SMU)
+        output_dir.mkdir(exist_ok=True)
+
+        fname_real = f"{fig_name}_eps_real.{fig_format}" if fig_name else f"eps_real.{fig_format}"
+        fig_real.savefig(str(output_dir / fname_real), dpi=600,
+                         bbox_inches='tight', transparent=plot_transparency,
+                         format=fig_format)
+
+        fname_imag = f"{fig_name}_eps_imag.{fig_format}" if fig_name else f"eps_imag.{fig_format}"
+        fig_imag.savefig(str(output_dir / fname_imag), dpi=600,
+                         bbox_inches='tight', transparent=plot_transparency,
+                         format=fig_format)
+
+    # Titles off unless one is asked for - a figure caption carries
+    # the description in a paper.
+    ax_real.set_title(plot_title if plot_title else '')
+    ax_imag.set_title(plot_title if plot_title else '')
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig_real)
+        plt.close(fig_imag)
+    return fig_real, fig_imag
 
 
 def plot_resistance(smu_data: list,
@@ -777,7 +976,9 @@ def plot_resistance(smu_data: list,
                    output_SMU: Optional[str] = None,
                    fig_name: Optional[str] = None,
                    fig_format: str = 'tiff',
-                   plot_transparency: bool = False) -> Figure:
+                   plot_title: Optional[str] = None,
+                   plot_transparency: bool = True,
+                   show: bool = True) -> Figure:
     """
     Plot resistance vs voltage from IV data.
     
@@ -804,10 +1005,10 @@ def plot_resistance(smu_data: list,
     """
     
     # Import here to avoid circular imports
-    from plot_style import set_plot_style
+    from plot_style import apply_plot_style
     
     # Set plot style based on export_data
-    fig_size = set_plot_style(export_data=export_data, use_tex=True)
+    fig_size = apply_plot_style(export_data=export_data)
     
     fig, ax = plt.subplots(figsize=fig_size)
     
@@ -960,10 +1161,17 @@ def plot_resistance(smu_data: list,
         output_dir.mkdir(exist_ok=True)
         fname = f"{fig_name}_resistance.{fig_format}" if fig_name else f"resistance.{fig_format}"
         output_file = str(output_dir / fname)
-        fig.savefig(output_file, dpi=300, bbox_inches='tight', 
+        fig.savefig(output_file, dpi=600, bbox_inches='tight', 
                    transparent=plot_transparency, format=fig_format)
     
-    plt.show()
+    # Titles off unless one is asked for - a figure caption carries
+    # the description in a paper.
+    ax.set_title(plot_title if plot_title else '')
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
     return fig
 
 
@@ -1005,7 +1213,10 @@ def plot_IV_3T(smu_data: list,
                output_SMU: Optional[str] = None,
                fig_name: Optional[str] = None,
                fig_format: str = 'tiff',
-               plot_transparency: bool = False) -> Figure:
+               plot_title: Optional[str] = None,
+               plot_transparency: bool = True,
+               show: bool = True,
+               drain_correct: bool = False) -> Figure:
     """
     Plot 3-terminal FET I-V characteristics with selectable terminals and
     conduction-mechanism analysis modes.
@@ -1048,6 +1259,7 @@ def plot_IV_3T(smu_data: list,
     fig_name          : filename prefix.
     fig_format        : figure format ('png', 'svg', 'tiff', …).
     plot_transparency : transparent background.
+    drain_correct     : if True, applies correction to drain current: I_drain_corrected = I_drain + I_gate / 2. Default False.
 
     Returns
     -------
@@ -1070,8 +1282,8 @@ def plot_IV_3T(smu_data: list,
         if t not in _TERMINAL_MAP:
             raise ValueError(f"terminal_display entries must be 'gate', 'drain', or 'source', got '{t}'")
 
-    from plot_style import set_plot_style
-    fig_size = set_plot_style(export_data=export_data, use_tex=True)
+    from plot_style import apply_plot_style
+    fig_size = apply_plot_style(export_data=export_data)
     fig, ax = plt.subplots(figsize=fig_size)
 
     x_v_col = _TERMINAL_MAP[x_terminal]['V']
@@ -1084,9 +1296,12 @@ def plot_IV_3T(smu_data: list,
         for idx, smu_obj in enumerate(smu_data):
             current_run_nums = _get_smu_run_nums(run_nums, idx)
             data_list, _ = smu_obj.get_iv3T_data(current_run_nums)
-            for df in data_list:
-                if df.empty:
+            for df_orig in data_list:
+                if df_orig.empty:
                     continue
+                df = df_orig.copy()
+                if drain_correct:
+                    df[_TERMINAL_MAP['drain']['I']] = df[_TERMINAL_MAP['drain']['I']] + df[_TERMINAL_MAP['gate']['I']] / 2
                 for term in terminal_display:
                     if norm_current and term in ('drain', 'source'):
                         continue
@@ -1110,9 +1325,13 @@ def plot_IV_3T(smu_data: list,
         data_list, default_plot_strings = smu_obj.get_iv3T_data(current_run_nums)
         plot_strings = current_run_labels if current_run_labels is not None else default_plot_strings
 
-        for df, run_label in zip(data_list, plot_strings):
-            if df.empty:
+        for df_orig, run_label in zip(data_list, plot_strings):
+            if df_orig.empty:
                 continue
+
+            df = df_orig.copy()
+            if drain_correct:
+                df[_TERMINAL_MAP['drain']['I']] = df[_TERMINAL_MAP['drain']['I']] + df[_TERMINAL_MAP['gate']['I']] / 2
 
             x_voltage_raw = df[x_v_col].copy()
 
@@ -1290,10 +1509,17 @@ def plot_IV_3T(smu_data: list,
         output_dir = Path(output_SMU)
         output_dir.mkdir(exist_ok=True)
         fname = f"{fig_name}_IV3T_{plot_mode}.{fig_format}" if fig_name else f"IV3T_{plot_mode}.{fig_format}"
-        fig.savefig(str(output_dir / fname), dpi=300, bbox_inches='tight',
+        fig.savefig(str(output_dir / fname), dpi=600, bbox_inches='tight',
                     transparent=plot_transparency, format=fig_format)
 
-    plt.show()
+    # Titles off unless one is asked for - a figure caption carries
+    # the description in a paper.
+    ax.set_title(plot_title if plot_title else '')
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
     return fig
 
 
@@ -1313,7 +1539,9 @@ def plot_resistance_3T(smu_data: list,
                        output_SMU: Optional[str] = None,
                        fig_name: Optional[str] = None,
                        fig_format: str = 'tiff',
-                       plot_transparency: bool = False) -> Figure:
+                       plot_title: Optional[str] = None,
+                       plot_transparency: bool = True,
+                       show: bool = True) -> Figure:
     """
     Plot resistance (R = V/I) for selected terminals of 3-terminal FET data.
 
@@ -1325,8 +1553,8 @@ def plot_resistance_3T(smu_data: list,
         terminal_display = ['drain']
     terminal_display = [t.lower() for t in terminal_display]
 
-    from plot_style import set_plot_style
-    fig_size = set_plot_style(export_data=export_data, use_tex=True)
+    from plot_style import apply_plot_style
+    fig_size = apply_plot_style(export_data=export_data)
     fig, ax = plt.subplots(figsize=fig_size)
 
     x_v_col = _TERMINAL_MAP[x_terminal]['V']
@@ -1438,10 +1666,17 @@ def plot_resistance_3T(smu_data: list,
         output_dir = Path(output_SMU)
         output_dir.mkdir(exist_ok=True)
         fname = f"{fig_name}_resistance_3T.{fig_format}" if fig_name else f"resistance_3T.{fig_format}"
-        fig.savefig(str(output_dir / fname), dpi=300, bbox_inches='tight',
+        fig.savefig(str(output_dir / fname), dpi=600, bbox_inches='tight',
                     transparent=plot_transparency, format=fig_format)
 
-    plt.show()
+    # Titles off unless one is asked for - a figure caption carries
+    # the description in a paper.
+    ax.set_title(plot_title if plot_title else '')
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
     return fig
 
 
@@ -1798,7 +2033,9 @@ def plot_hysteresis_evolution(smu_data: list,
                               export_data: bool = False,
                               output_SMU: Optional[str] = None,
                               fig_format: str = 'tiff',
-                              plot_transparency: bool = False) -> Tuple[Figure, list]:
+                              plot_title: Optional[str] = None,
+                              plot_transparency: bool = True,
+                              show: bool = True) -> Tuple[Figure, list]:
     """
     Multi-panel figure showing how hysteresis evolves across successive sweeps.
 
@@ -1810,8 +2047,8 @@ def plot_hysteresis_evolution(smu_data: list,
 
     Returns the Figure and the list of hysteresis dicts.
     """
-    from plot_style import set_plot_style
-    fig_size = set_plot_style(export_data=export_data, use_tex=True)
+    from plot_style import apply_plot_style
+    fig_size = apply_plot_style(export_data=export_data)
 
     hyst = extract_hysteresis(smu_data, run_nums=run_nums, smooth_gm=smooth_gm)
     if not hyst:
@@ -1866,17 +2103,25 @@ def plot_hysteresis_evolution(smu_data: list,
     ax.ticklabel_format(axis='y', style='sci', scilimits=(-2, 2))
     ax.grid(True, alpha=0.3)
 
+    # The (a)-(d) panel labels stay - they identify the panels rather than
+    # titling the figure. plot_title adds a figure-level title if one is wanted.
+    if plot_title:
+        fig.suptitle(plot_title)
+
     fig.tight_layout()
 
     if export_data and output_SMU is not None:
         from pathlib import Path
         out = Path(output_SMU)
         out.mkdir(exist_ok=True)
-        fig.savefig(str(out / f'hysteresis_evolution.{fig_format}'), dpi=300,
+        fig.savefig(str(out / f'hysteresis_evolution.{fig_format}'), dpi=600,
                     bbox_inches='tight', transparent=plot_transparency,
                     format=fig_format)
 
-    plt.show()
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
     return fig, hyst
 
 
@@ -1886,7 +2131,7 @@ def fit_hysteresis_model(hyst_data: list,
                          export_data: bool = False,
                          output_SMU: Optional[str] = None,
                          fig_format: str = 'tiff',
-                         plot_transparency: bool = False) -> Tuple[Figure, dict]:
+                         plot_transparency: bool = True) -> Tuple[Figure, dict]:
     """
     Fit competing physical models to the inter-cycle V_th drift and ΔV_th
     evolution to identify the dominant hysteresis mechanism.
@@ -1927,8 +2172,8 @@ def fit_hysteresis_model(hyst_data: list,
     """
     from scipy.optimize import curve_fit
 
-    from plot_style import set_plot_style
-    fig_size = set_plot_style(export_data=export_data, use_tex=True)
+    from plot_style import apply_plot_style
+    fig_size = apply_plot_style(export_data=export_data)
 
     runs = np.array([h['run_num'] for h in hyst_data], dtype=float)
     Vth_f = np.array([h['V_th_fwd'] for h in hyst_data])
@@ -2029,7 +2274,7 @@ def fit_hysteresis_model(hyst_data: list,
         from pathlib import Path
         out = Path(output_SMU)
         out.mkdir(exist_ok=True)
-        fig.savefig(str(out / f'hysteresis_model_fits.{fig_format}'), dpi=300,
+        fig.savefig(str(out / f'hysteresis_model_fits.{fig_format}'), dpi=600,
                     bbox_inches='tight', transparent=plot_transparency,
                     format=fig_format)
 
@@ -2042,7 +2287,9 @@ def plot_charge_correlation(hyst_data: list,
                             export_data: bool = False,
                             output_SMU: Optional[str] = None,
                             fig_format: str = 'tiff',
-                            plot_transparency: bool = False) -> Figure:
+                            plot_title: Optional[str] = None,
+                            plot_transparency: bool = True,
+                            show: bool = True) -> Figure:
     """
     Test the electrochemical hypothesis: if ΔV_th is driven by ionic
     migration (oxygen vacancies), it should scale with the cumulative
@@ -2055,8 +2302,8 @@ def plot_charge_correlation(hyst_data: list,
 
     Returns the Figure.
     """
-    from plot_style import set_plot_style
-    fig_size = set_plot_style(export_data=export_data, use_tex=True)
+    from plot_style import apply_plot_style
+    fig_size = apply_plot_style(export_data=export_data)
 
     dVth = np.array([h['delta_V_th'] for h in hyst_data])
     Qg = np.array([h['Q_gate'] for h in hyst_data])
@@ -2095,11 +2342,18 @@ def plot_charge_correlation(hyst_data: list,
         from pathlib import Path
         out = Path(output_SMU)
         out.mkdir(exist_ok=True)
-        fig.savefig(str(out / f'charge_correlation.{fig_format}'), dpi=300,
+        fig.savefig(str(out / f'charge_correlation.{fig_format}'), dpi=600,
                     bbox_inches='tight', transparent=plot_transparency,
                     format=fig_format)
 
-    plt.show()
+    # Titles off unless one is asked for - a figure caption carries
+    # the description in a paper.
+    ax.set_title(plot_title if plot_title else '')
+
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
     return fig
 
 

@@ -2,10 +2,18 @@
 from import_dep import *
 
 
+# Remembers the arguments of the most recent set_plot_style() call - i.e. the
+# style the notebook asked for at the top of the session. Plotting functions
+# re-apply it through apply_plot_style() so that they never silently discard
+# settings the notebook chose (see that function for why this matters).
+_LAST_STYLE = {'export_data': False, 'powerpoint_data': False,
+               'use_tex': True, 'markersize': None}
+
+
 def set_plot_style(export_data = False, powerpoint_data = False, use_tex=True, markersize=None):
     """
     Set publication-quality plot styles.
-    
+
     Parameters:
     -----------
     use_tex : bool
@@ -13,7 +21,10 @@ def set_plot_style(export_data = False, powerpoint_data = False, use_tex=True, m
     markersize : float, optional
         Override the default markersize. If None, uses default (4.0 for export, 6.0 for display)
     """
-    
+    _LAST_STYLE.update({'export_data': export_data,
+                        'powerpoint_data': powerpoint_data,
+                        'use_tex': use_tex, 'markersize': markersize})
+
     # Set the figure size based on whether we are visualising or exporting the data
     if export_data == True:
         fig_size = [3.5, 2.625] # Publication ready sizes
@@ -32,6 +43,9 @@ def set_plot_style(export_data = False, powerpoint_data = False, use_tex=True, m
         'figure.figsize':fig_size,
         'savefig.bbox': 'tight',
         'savefig.pad_inches': 0.05,
+        # Project default for raster exports (png/tiff/jpg). Vector formats
+        # (svg/pdf) ignore it except for any embedded raster elements.
+        'savefig.dpi': 600,
         
         # Font and text settings
         'font.family': ['serif'],
@@ -86,6 +100,39 @@ def set_plot_style(export_data = False, powerpoint_data = False, use_tex=True, m
     })
     
     return fig_size
+
+
+def apply_plot_style(export_data=None):
+    """Re-apply the style the notebook set up, for use inside plotting functions.
+
+    Plotting functions need the figure size, but calling
+    ``set_plot_style(export_data=..., use_tex=True)`` to get it also *resets*
+    every other rcParam to that call's defaults. The notebook's
+
+        fig_size = set_plot_style(export_data=export_data, use_tex=True, markersize=0.1)
+
+    was therefore being undone by the first plot call, which put markersize back
+    to 4.0/6.0 and forced ``use_tex`` on even if the notebook had turned it off.
+
+    This applies the remembered settings instead, overriding only
+    ``export_data`` when a function is asked to render at publication size.
+    Returns the figure size, exactly as ``set_plot_style`` does.
+
+    An ``export_data`` override is not remembered: it styles that one figure and
+    the next plotting call restores the notebook's own settings. In normal use
+    the point is moot, because notebooks pass ``export_data=export_data`` and so
+    never override anything.
+    """
+    remembered = dict(_LAST_STYLE)
+    kwargs = dict(remembered)
+    if export_data is not None:
+        kwargs['export_data'] = export_data
+    try:
+        return set_plot_style(**kwargs)
+    finally:
+        # An export_data override applies to this figure only - it must not
+        # become the session's new baseline.
+        _LAST_STYLE.update(remembered)
 
 
 def add_colorbar(fig, ax, sm, min_val, max_val, fig_size, field = True):
